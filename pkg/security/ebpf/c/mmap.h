@@ -112,7 +112,8 @@ int __attribute__((always_inline)) sys_mmap_ret(void *ctx, int retval, u64 addr)
         return 0;
 
     if (syscall->resolver.ret == DENTRY_DISCARDED) {
-       return 0;
+        monitor_discarded(EVENT_MMAP);
+        return 0;
     }
 
     if (filter_syscall(syscall, mmap_approvers)) {

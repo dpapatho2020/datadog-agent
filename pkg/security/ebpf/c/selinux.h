@@ -174,7 +174,12 @@ int __attribute__((always_inline)) dr_selinux_callback(void *ctx, int retval) {
     if (!syscall)
         return 0;
 
-    if (syscall->resolver.ret == DENTRY_DISCARDED || syscall->resolver.ret == DENTRY_INVALID)
+    if (syscall->resolver.ret == DENTRY_DISCARDED) {
+        monitor_discarded(EVENT_SELINUX);
+        return 0;
+    }
+
+    if (syscall->resolver.ret == DENTRY_INVALID)
         return 0;
 
     struct selinux_event_t event = {};

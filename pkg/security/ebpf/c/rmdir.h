@@ -110,6 +110,7 @@ int __attribute__((always_inline)) kprobe_dr_security_inode_rmdir_callback(struc
         return 0;
 
     if (syscall->resolver.ret == DENTRY_DISCARDED) {
+        monitor_discarded(EVENT_RMDIR);
         return mark_as_discarded(syscall);
     }
     return 0;

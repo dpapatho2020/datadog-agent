@@ -137,7 +137,8 @@ int __attribute__((always_inline)) dr_mkdir_callback(void *ctx, int retval) {
         return 0;
 
     if (syscall->resolver.ret == DENTRY_DISCARDED) {
-       return 0;
+        monitor_discarded(EVENT_MKDIR);
+        return 0;
     }
 
     struct mkdir_event_t event = {
