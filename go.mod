@@ -66,7 +66,7 @@ require (
 	github.com/DataDog/datadog-go v4.8.3+incompatible
 	github.com/DataDog/datadog-operator v0.5.0-rc.2.0.20210402083916-25ba9a22e67a
 	github.com/DataDog/ebpf v0.0.0-20220301203322-3fc9ab3b8daf
-	github.com/DataDog/ebpf-manager v0.0.0-20220223090948-29871766cdd0
+	github.com/DataDog/ebpf-manager v0.0.0-20220316134509-0ba538cc187f
 	github.com/DataDog/gohai v0.0.0-20220121142033-4006c7a9c63d
 	github.com/DataDog/gopsutil v0.0.0-20220308095538-d086941833e3
 	github.com/DataDog/nikos v1.7.5
