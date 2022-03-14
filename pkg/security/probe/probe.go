@@ -276,8 +276,8 @@ func (p *Probe) sendDiscardersStats() {
 }
 
 func (p *Probe) sendTCProgramsStats() {
-	p.tcProgramsLock.Lock()
-	defer p.tcProgramsLock.Unlock()
+	p.tcProgramsLock.RLock()
+	defer p.tcProgramsLock.RUnlock()
 
 	if val := float64(len(p.tcPrograms)); val > 0 {
 		_ = p.statsdClient.Gauge(metrics.MetricTCProgram, val, []string{}, 1.0)
@@ -428,6 +428,15 @@ func (p *Probe) handleEvent(CPU uint64, data []byte) {
 			log.Errorf("failed to decode umount event: %s (offset %d, len %d)", err, offset, dataLen)
 			return
 		}
+
+		mount := p.resolvers.MountResolver.Get(event.Umount.MountID)
+		if mount != nil && mount.GetFSType() == "nsfs" {
+			nsid := uint32(mount.RootInode)
+			if namespace := p.resolvers.NamespaceResolver.ResolveNetworkNamespace(nsid); namespace != nil {
+				p.resolvers.NamespaceResolver.FlushNetworkNamespace(namespace)
+			}
+		}
+
 	case model.FileOpenEventType:
 		if _, err = event.Open.UnmarshalBinary(data[offset:]); err != nil {
 			log.Errorf("failed to decode open event: %s (offset %d, len %d)", err, offset, dataLen)
