@@ -244,9 +244,117 @@ func TestObfuscateAppSec(t *testing.T) {
 	}
 }
 
-func TestX(t *testing.T) {
-	//o := appsecEventsObfuscator{}
-	//o.obfuscateAppSec(`{"toto":null,"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"k3"],"highlight":["highlighted SENSITIVE value 1","highlighted SENSITIVE value 2","highlighted SENSITIVE value 3"],"value":"the entire SENSITIVE value"}]}]}]}`)
+func TestObfuscateAppSecParameter(t *testing.T) {
+	i := []struct {
+		name                          string
+		input                         string
+		expectedSyntaxError           bool
+		expectedUnexpectedTypeError   bool
+		expectedOutput                string
+		expectedUnexpectedEndOfString bool
+	}{
+		{
+			name:           "value-alone",
+			input:          `{ "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" }`,
+			expectedOutput: `{ "value": "i am a ? value with many ?" }`,
+		},
+		{
+			name:           "highlight-alone",
+			input:          `{ "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ] }`,
+			expectedOutput: `{ "highlight": [ "i am a ? value", "i am not a a sensitive value", "i am another ? value" ] }`,
+		},
+		{
+			name:           "sensitive-values-without-key-path",
+			input:          `{ "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ] }`,
+			expectedOutput: `{ "value": "i am a ? value with many ?", "highlight": [ "i am a ? value", "i am not a a sensitive value", "i am another ? value" ] }`,
+		},
+		{
+			name:           "sensitive-values",
+			input:          `{ "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ], "key_path": ["key"] }`,
+			expectedOutput: `{ "value": "i am a ? value with many ?", "highlight": [ "i am a ? value", "i am not a a sensitive value", "i am another ? value" ], "key_path": ["key"] }`,
+		},
+		{
+			name:           "sensitive-key-last",
+			input:          `{ "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ], "key_path": ["key", 0, 1, 2, "SENSITIVE_KEY"] }`,
+			expectedOutput: `{ "value": "?", "highlight": [ "?", "?", "?" ], "key_path": ["key", 0, 1, 2, "SENSITIVE_KEY"] }`,
+		},
+		{
+			name:           "sensitive-key-middle",
+			input:          `{ "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "key_path": ["key", 0, 1, 2, "SENSITIVE_KEY"], "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ] }`,
+			expectedOutput: `{ "value": "?", "key_path": ["key", 0, 1, 2, "SENSITIVE_KEY"], "highlight": [ "?", "?", "?" ] }`,
+		},
+		{
+			name:           "sensitive-key-first",
+			input:          `{ "key_path": ["key", 0, 1, 2, "SENSITIVE_KEY"], "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ] }`,
+			expectedOutput: `{ "key_path": ["key", 0, 1, 2, "SENSITIVE_KEY"], "value": "?", "highlight": [ "?", "?", "?" ] }`,
+		},
+		{
+			name:           "empty-object",
+			input:          `{  }`,
+			expectedOutput: `{  }`,
+		},
+		{
+			name:           "empty-object",
+			input:          `{}`,
+			expectedOutput: `{}`,
+		},
+		{
+			name:           "object-other-properties",
+			input:          `{ "key 1": "SENSITIVE_VALUE", "key 2": [ "SENSITIVE_VALUE" ], "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null }`,
+			expectedOutput: `{ "key 1": "SENSITIVE_VALUE", "key 2": [ "SENSITIVE_VALUE" ], "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null }`,
+		},
+		{
+			name:           "object-mixed-properties",
+			input:          `{ "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ], "key 1": "SENSITIVE_VALUE", "key_path": ["key"], "key 2": [ "SENSITIVE_VALUE" ], "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null }`,
+			expectedOutput: `{ "highlight": [ "i am a ? value", "i am not a a sensitive value", "i am another ? value" ], "key 1": "SENSITIVE_VALUE", "key_path": ["key"], "key 2": [ "SENSITIVE_VALUE" ], "value": "i am a ? value with many ?", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null }`,
+		},
+		{
+			name:           "object-mixed-properties-sensitive-key",
+			input:          `{ "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ], "key 1": "SENSITIVE_VALUE", "key_path": ["SENSITIVE_KEY"], "key 2": [ "SENSITIVE_VALUE" ], "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null }`,
+			expectedOutput: `{ "highlight": [ "?", "?", "?" ], "key 1": "SENSITIVE_VALUE", "key_path": ["SENSITIVE_KEY"], "key 2": [ "SENSITIVE_VALUE" ], "value": "?", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null }`,
+		},
+		{
+			name:                          "unterminated-json",
+			input:                         `{ "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ], "key 1": "SENSITIVE_VALUE", "key_path": ["SENSITIVE_KEY"], "key 2": [ "SENSITIVE_VALUE" ], "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null`,
+			expectedOutput:                `{ "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ], "key 1": "SENSITIVE_VALUE", "key_path": ["SENSITIVE_KEY"], "key 2": [ "SENSITIVE_VALUE" ], "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null`,
+			expectedUnexpectedEndOfString: true,
+		},
+		{
+			name:                "syntax-error",
+			input:               `{ "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ], "key 1": "SENSITIVE_VALUE", "key_path": ["SENSITIVE_KEY"], "key 2": [ "SENSITIVE_VALUE" ], "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": i`,
+			expectedOutput:      `{ "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ], "key 1": "SENSITIVE_VALUE", "key_path": ["SENSITIVE_KEY"], "key 2": [ "SENSITIVE_VALUE" ], "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": i`,
+			expectedSyntaxError: true,
+		},
+	}
+	for _, tc := range i {
+		t.Run(tc.name, func(t *testing.T) {
+			o := appsecEventsObfuscator{
+				keyRE:   regexp.MustCompile("SENSITIVE_KEY"),
+				valueRE: regexp.MustCompile("SENSITIVE_VALUE"),
+			}
+			var diff Diff
+			scanner := &scanner{}
+			scanner.reset()
+			_, err := o.obfuscateAppSecRuleParameter(scanner, tc.input, 0, &diff)
+			output := diff.Apply(tc.input)
+			if err != nil {
+				if tc.expectedSyntaxError {
+					require.Equal(t, scanner.err, err)
+				} else if tc.expectedUnexpectedTypeError {
+					require.Equal(t, errUnexpectedType, err)
+				} else if tc.expectedUnexpectedEndOfString {
+					require.Equal(t, errUnexpectedEndOfString, err)
+				} else {
+					require.NoError(t, err)
+				}
+				require.Empty(t, diff)
+				require.Equal(t, tc.expectedOutput, output)
+			} else {
+				output := diff.Apply(tc.input)
+				require.Equal(t, tc.expectedOutput, output)
+			}
+		})
+	}
 }
 
 func TestObfuscateAppSecParameterValue(t *testing.T) {
@@ -343,7 +451,7 @@ func TestObfuscateAppSecParameterValue(t *testing.T) {
 					var diff Diff
 					scanner := &scanner{}
 					scanner.reset()
-					_, err := o.obfuscateAppSecParameterValue(scanner, tc.input, 0, &diff, hasSensitiveKey)
+					_, err := o.obfuscateAppSecParameterValue_(scanner, tc.input, 0, &diff, hasSensitiveKey)
 					output := diff.Apply(tc.input)
 					if err != nil {
 						if tc.expectedSyntaxError {
@@ -471,7 +579,7 @@ func TestObfuscateAppSecParameterHighlight(t *testing.T) {
 					var diff Diff
 					scanner := &scanner{}
 					scanner.reset()
-					_, err := o.obfuscateAppSecParameterHighlight(scanner, tc.input, 0, &diff, hasSensitiveKey)
+					_, err := o.obfuscateAppSecParameterHighlight_(scanner, tc.input, 0, &diff, hasSensitiveKey)
 					output := diff.Apply(tc.input)
 					if err != nil {
 						if tc.expectedSyntaxError {
@@ -615,7 +723,7 @@ func TestObfuscateAppSecParameterKeyPath(t *testing.T) {
 			}
 			scanner := &scanner{}
 			scanner.reset()
-			hasSensitiveKey, i, err := o.obfuscateAppSecParameterKeyPath(scanner, tc.input, 0)
+			hasSensitiveKey, i, err := o.obfuscateAppSecParameterKeyPath_(scanner, tc.input, 0)
 			if tc.expectedSyntaxError {
 				require.Equal(t, scanner.err, err)
 			} else if tc.expectedUnexpectedTypeError {
@@ -748,7 +856,9 @@ func TestWalkObject(t *testing.T) {
 			scanner := &scanner{}
 			scanner.reset()
 			seen := map[string]string{}
-			i, err := walkObject(scanner, tc.input, 0, func(key, value string) {
+			i, err := walkObject(scanner, tc.input, 0, func(keyFrom, keyTo, valueFrom, valueTo int) {
+				key := tc.input[keyFrom:keyTo]
+				value := tc.input[valueFrom:valueTo]
 				assert.NotContains(t, seen, key)
 				seen[key] = value
 			})

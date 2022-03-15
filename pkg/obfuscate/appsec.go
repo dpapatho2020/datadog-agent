@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -337,10 +338,47 @@ func (o *appsecEventsObfuscator) obfuscateAppSecRuleParameters(scanner *scanner,
 }
 
 func (o *appsecEventsObfuscator) obfuscateAppSecRuleParameter(scanner *scanner, input string, i int, diff *Diff) (int, error) {
+	var (
+		paramKeyPath                         string
+		paramValueFrom, paramValueTo         int
+		paramHighlightFrom, paramHighlightTo int
+	)
+	i, err := walkObject(scanner, input, i, func(keyFrom, keyTo int, valueFrom, valueTo int) {
+		switch input[keyFrom:keyTo] {
+		case `"key_path"`:
+			paramKeyPath = input[valueFrom:valueTo]
+		case `"value"`:
+			paramValueFrom = valueFrom
+			paramValueTo = valueTo
+		case `"highlight"`:
+			paramHighlightFrom = valueFrom
+			paramHighlightTo = valueTo
+		}
+	})
+	if err != nil {
+		return i, err
+	}
+	var hasSensitiveKey bool
+	if paramKeyPath != "" {
+		hasSensitiveKey = o.obfuscateAppSecParameterKeyPath(paramKeyPath)
+	}
+	if paramHighlight := input[paramHighlightFrom:paramHighlightTo]; paramHighlight != "" {
+		o.obfuscateAppSecParameterHighlight(paramHighlight, diff, paramHighlightFrom, hasSensitiveKey)
+	}
+	if paramValue := input[paramValueFrom:paramValueTo]; paramValue != "" {
+		o.obfuscateAppSecParameterValue(paramValue, diff, paramValueFrom, hasSensitiveKey)
+	}
 	return i, nil
 }
 
-func (o *appsecEventsObfuscator) obfuscateAppSecParameterKeyPath(scanner *scanner, input string, i int) (hasSensitiveKey bool, j int, err error) {
+func (o *appsecEventsObfuscator) obfuscateAppSecParameterKeyPath(input string) (hasSensitiveKey bool) {
+	var scanner scanner
+	scanner.reset()
+	hasSensitiveKey, _, _ = o.obfuscateAppSecParameterKeyPath_(&scanner, input, 0)
+	return
+}
+
+func (o *appsecEventsObfuscator) obfuscateAppSecParameterKeyPath_(scanner *scanner, input string, i int) (hasSensitiveKey bool, j int, err error) {
 	i, err = obfuscateArrayStrings(scanner, input, i, func(from, to int) {
 		// Ignore the call if we already found a sensitive key in a previous call
 		if hasSensitiveKey {
@@ -361,7 +399,21 @@ func (o *appsecEventsObfuscator) obfuscateAppSecParameterKeyPath(scanner *scanne
 	return hasSensitiveKey, i, nil
 }
 
-func (o *appsecEventsObfuscator) obfuscateAppSecParameterHighlight(scanner *scanner, input string, i int, diff *Diff, hasSensitiveKey bool) (int, error) {
+func (o *appsecEventsObfuscator) obfuscateAppSecParameterHighlight(input string, diff *Diff, diffOffset int, hasSensitiveKey bool) error {
+	var (
+		scanner scanner
+		tmpDiff Diff
+	)
+	scanner.reset()
+	_, err := o.obfuscateAppSecParameterHighlight_(&scanner, input, 0, &tmpDiff, hasSensitiveKey)
+	if err != nil {
+		return err
+	}
+	tmpDiff.AppendTo(diff, diffOffset)
+	return nil
+}
+
+func (o *appsecEventsObfuscator) obfuscateAppSecParameterHighlight_(scanner *scanner, input string, i int, diff *Diff, hasSensitiveKey bool) (int, error) {
 	i, err := obfuscateArrayStrings(scanner, input, i, func(from, to int) {
 		if hasSensitiveKey {
 			diff.Add(from, to, `"?"`)
@@ -393,11 +445,26 @@ type Diff []struct {
 }
 
 func (d *Diff) Add(from, to int, value string) {
-	*d = append(*d, struct {
+	elt := struct {
 		from  int
 		to    int
 		value string
-	}{from, to, value})
+	}{
+		from:  from,
+		to:    to,
+		value: value,
+	}
+	diff := *d
+	l := len(diff)
+	i := sort.Search(l, func(i int) bool {
+		return (*d)[i].to > from
+	})
+	if i == l {
+		*d = append(diff, elt)
+		return
+	}
+	*d = append(diff[:i+1], diff[i:]...)
+	(*d)[i] = elt
 }
 
 func (d Diff) Apply(input string) string {
@@ -410,6 +477,12 @@ func (d Diff) Apply(input string) string {
 	}
 	output.WriteString(input[from:])
 	return output.String()
+}
+
+func (d *Diff) AppendTo(diff *Diff, offset int) {
+	for _, d := range *d {
+		diff.Add(d.from+offset, d.to+offset, d.value)
+	}
 }
 
 func obfuscateArrayStrings(scanner *scanner, input string, i int, visit func(from, to int)) (int, error) {
@@ -452,7 +525,7 @@ func obfuscateArrayStrings(scanner *scanner, input string, i int, visit func(fro
 	return i, errUnexpectedType
 }
 
-func walkObject(scanner *scanner, input string, i int, visit func(key, value string)) (int, error) {
+func walkObject(scanner *scanner, input string, i int, visit func(keyFrom, keyTo, valueFrom, valueTo int)) (int, error) {
 	i, err := stepTo(scanner, input, i, scanBeginObject)
 	if err != nil {
 		return i, err
@@ -475,7 +548,7 @@ func walkObject(scanner *scanner, input string, i int, visit func(key, value str
 			// We reached the end of the object we were scanning
 			if keyFrom != -1 && keyTo != -1 && valueFrom != -1 {
 				// Visit the last value of the objet
-				visit(input[keyFrom:keyTo], input[valueFrom:i])
+				visit(keyFrom, keyTo, valueFrom, i)
 			}
 			return i + 1, nil
 
@@ -499,7 +572,7 @@ func walkObject(scanner *scanner, input string, i int, visit func(key, value str
 			if depth != 0 {
 				continue
 			}
-			visit(input[keyFrom:keyTo], input[valueFrom:i])
+			visit(keyFrom, keyTo, valueFrom, i)
 			keyFrom = -1
 			keyTo = -1
 			valueFrom = -1
@@ -514,7 +587,21 @@ func walkObject(scanner *scanner, input string, i int, visit func(key, value str
 	return i, errUnexpectedType
 }
 
-func (o *appsecEventsObfuscator) obfuscateAppSecParameterValue(scanner *scanner, input string, i int, diff *Diff, hasSensitiveKey bool) (int, error) {
+func (o *appsecEventsObfuscator) obfuscateAppSecParameterValue(input string, diff *Diff, diffOffset int, hasSensitiveKey bool) error {
+	var (
+		scanner scanner
+		tmpDiff Diff
+	)
+	scanner.reset()
+	_, err := o.obfuscateAppSecParameterValue_(&scanner, input, 0, &tmpDiff, hasSensitiveKey)
+	if err != nil {
+		return err
+	}
+	tmpDiff.AppendTo(diff, diffOffset)
+	return nil
+}
+
+func (o *appsecEventsObfuscator) obfuscateAppSecParameterValue_(scanner *scanner, input string, i int, diff *Diff, hasSensitiveKey bool) (int, error) {
 	value, from, i, err := scanString(scanner, input, i)
 	if err != nil {
 		return i, err
