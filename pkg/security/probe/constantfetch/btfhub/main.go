@@ -16,8 +16,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
-	"syscall"
 
 	"github.com/DataDog/datadog-agent/pkg/security/ebpf/kernel"
 	"github.com/DataDog/datadog-agent/pkg/security/probe"
@@ -26,45 +24,23 @@ import (
 )
 
 func main() {
-	increaseRLimit()
-
 	archivePath := os.Args[1]
 	twCollector := TreeWalkCollector{}
 
 	if err := filepath.WalkDir(archivePath, twCollector.treeWalkerBuilder(archivePath)); err != nil {
 		panic(err)
 	}
-	twCollector.WaitAndCollect()
-}
-
-func increaseRLimit() {
-	var rLimit syscall.Rlimit
-	err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
-	if err != nil {
-		fmt.Println("Error Getting Rlimit ", err)
-	}
-	fmt.Println(rLimit)
-	rLimit.Max = 999999
-	rLimit.Cur = 999999
-	err = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit)
-	if err != nil {
-		fmt.Println("Error Setting Rlimit ", err)
-	}
-	err = syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
-	if err != nil {
-		fmt.Println("Error Getting Rlimit ", err)
-	}
-	fmt.Println("Rlimit Final", rLimit)
+	fmt.Println(len(twCollector.infos))
+	fmt.Println(twCollector.infos[:5])
 }
 
 type TreeWalkCollector struct {
-	wg           sync.WaitGroup
-	constantChan chan ConstantsInfo
+	infos []ConstantsInfo
 }
 
 func NewTreeWalkCollector() *TreeWalkCollector {
 	return &TreeWalkCollector{
-		constantChan: make(chan ConstantsInfo),
+		infos: make([]ConstantsInfo, 0),
 	}
 }
 
@@ -92,46 +68,23 @@ func (c *TreeWalkCollector) treeWalkerBuilder(prefix string) fs.WalkDirFunc {
 		distribVersion := btfParts[1]
 		arch := btfParts[2]
 
-		go func() {
-			fmt.Println(path)
-			c.wg.Add(1)
-			defer c.wg.Done()
+		fmt.Println(path)
 
-			constants, err := extractConstantsFromBTF(path)
-			c.constantChan <- ConstantsInfo{
-				distribution:   distribution,
-				distribVersion: distribVersion,
-				arch:           arch,
-				constants:      constants,
-				err:            err,
-			}
-		}()
+		constants, err := extractConstantsFromBTF(path)
+		if err != nil {
+			return err
+		}
+
+		c.infos = append(c.infos, ConstantsInfo{
+			distribution:   distribution,
+			distribVersion: distribVersion,
+			arch:           arch,
+			constants:      constants,
+			err:            err,
+		})
 
 		return err
 	}
-}
-
-func (c *TreeWalkCollector) WaitAndCollect() {
-	wgChan := make(chan struct{})
-	go func() {
-		c.wg.Wait()
-		close(wgChan)
-	}()
-
-	infos := make([]ConstantsInfo, 0)
-
-collector:
-	for {
-		select {
-		case <-wgChan:
-			fmt.Println("wg finish")
-			break collector
-		case ci := <-c.constantChan:
-			infos = append(infos, ci)
-		}
-	}
-
-	fmt.Println(len(infos))
 }
 
 type ConstantsInfo struct {
