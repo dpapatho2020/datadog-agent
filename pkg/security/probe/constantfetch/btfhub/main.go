@@ -66,7 +66,7 @@ func NewTreeWalkCollector() *TreeWalkCollector {
 func (c *TreeWalkCollector) treeWalkerBuilder(prefix string) fs.WalkDirFunc {
 	return func(path string, d fs.DirEntry, err error) error {
 		c.counter += 1
-		if c.counter%160 != 0 {
+		if c.counter%8 != 0 {
 			return nil
 		}
 
