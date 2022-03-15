@@ -28,8 +28,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	// defer os.RemoveAll(tmpDir)
-	fmt.Printf("tmp dir: %s\n", tmpDir)
+	defer os.RemoveAll(tmpDir)
 
 	extractCmd := exec.Command("tar", "xvf", archivePath, "-C", tmpDir)
 	if err := extractCmd.Run(); err != nil {
@@ -124,7 +123,6 @@ func parsePaholeOutput(tyName, btfPath string, lineF func(string) (uint64, bool)
 		btfArg = fmt.Sprintf("--btf_base=%s", btfPath)
 	}
 	cmd := exec.Command("pahole", tyName, btfArg)
-	fmt.Println(cmd)
 	cmd.Stdin = os.Stdin
 	output, err := cmd.Output()
 	if err != nil {
