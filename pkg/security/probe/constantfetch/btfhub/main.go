@@ -8,12 +8,16 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 
 	"github.com/DataDog/datadog-agent/pkg/security/ebpf/kernel"
 	"github.com/DataDog/datadog-agent/pkg/security/probe"
@@ -22,8 +26,123 @@ import (
 )
 
 func main() {
-	archivePath := os.Args[1]
+	increaseRLimit()
 
+	archivePath := os.Args[1]
+	twCollector := TreeWalkCollector{}
+
+	if err := filepath.WalkDir(archivePath, twCollector.treeWalkerBuilder(archivePath)); err != nil {
+		panic(err)
+	}
+	twCollector.WaitAndCollect()
+}
+
+func increaseRLimit() {
+	var rLimit syscall.Rlimit
+	err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
+	if err != nil {
+		fmt.Println("Error Getting Rlimit ", err)
+	}
+	fmt.Println(rLimit)
+	rLimit.Max = 999999
+	rLimit.Cur = 999999
+	err = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &rLimit)
+	if err != nil {
+		fmt.Println("Error Setting Rlimit ", err)
+	}
+	err = syscall.Getrlimit(syscall.RLIMIT_NOFILE, &rLimit)
+	if err != nil {
+		fmt.Println("Error Getting Rlimit ", err)
+	}
+	fmt.Println("Rlimit Final", rLimit)
+}
+
+type TreeWalkCollector struct {
+	wg           sync.WaitGroup
+	constantChan chan ConstantsInfo
+}
+
+func NewTreeWalkCollector() *TreeWalkCollector {
+	return &TreeWalkCollector{
+		constantChan: make(chan ConstantsInfo),
+	}
+}
+
+func (c *TreeWalkCollector) treeWalkerBuilder(prefix string) fs.WalkDirFunc {
+	return func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".tar.xz") {
+			return nil
+		}
+
+		pathSuffix := strings.TrimPrefix(path, prefix)
+
+		btfParts := strings.Split(pathSuffix, "/")
+		if len(btfParts) != 4 {
+			return fmt.Errorf("file has wront format: %s", pathSuffix)
+		}
+
+		distribution := btfParts[0]
+		distribVersion := btfParts[1]
+		arch := btfParts[2]
+
+		go func() {
+			fmt.Println(path)
+			c.wg.Add(1)
+			defer c.wg.Done()
+
+			constants, err := extractConstantsFromBTF(path)
+			c.constantChan <- ConstantsInfo{
+				distribution:   distribution,
+				distribVersion: distribVersion,
+				arch:           arch,
+				constants:      constants,
+				err:            err,
+			}
+		}()
+
+		return err
+	}
+}
+
+func (c *TreeWalkCollector) WaitAndCollect() {
+	wgChan := make(chan struct{})
+	go func() {
+		c.wg.Wait()
+		close(wgChan)
+	}()
+
+	infos := make([]ConstantsInfo, 0)
+
+collector:
+	for {
+		select {
+		case <-wgChan:
+			fmt.Println("wg finish")
+			break collector
+		case ci := <-c.constantChan:
+			infos = append(infos, ci)
+		}
+	}
+
+	fmt.Println(len(infos))
+}
+
+type ConstantsInfo struct {
+	distribution   string
+	distribVersion string
+	arch           string
+	constants      map[string]uint64
+	err            error
+}
+
+func extractConstantsFromBTF(archivePath string) (map[string]uint64, error) {
 	tmpDir, err := os.MkdirTemp("", "extract-dir")
 	if err != nil {
 		panic(err)
@@ -42,7 +161,7 @@ func main() {
 	releasePart := strings.Split(btfFileName, "-")[0]
 	kvCode, err := utilKernel.ParseReleaseString(releasePart)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	kv := &kernel.Version{
 		Code: kvCode,
@@ -50,14 +169,7 @@ func main() {
 
 	fetcher := NewConstantCollector(btfPath)
 
-	constants, err := probe.GetOffsetConstantsFromFetcher(fetcher, kv)
-	if err != nil {
-		panic(err)
-	}
-
-	for name, value := range constants {
-		fmt.Println(name, value)
-	}
+	return probe.GetOffsetConstantsFromFetcher(fetcher, kv)
 }
 
 type ConstantCollector struct {
