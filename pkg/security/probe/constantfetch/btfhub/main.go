@@ -33,7 +33,9 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		constantfetch.NewBTFHubConstantFetcher(kv)
+		fetcher, err := constantfetch.NewBTFHubConstantFetcher(kv)
+		fmt.Println(fetcher, err)
+		return
 	*/
 
 	if err := filepath.WalkDir(archivePath, twCollector.treeWalkerBuilder(archivePath)); err != nil {

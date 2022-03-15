@@ -9,15 +9,22 @@
 package constantfetch
 
 import (
+	_ "embed"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime"
 
 	"github.com/DataDog/datadog-agent/pkg/security/ebpf/kernel"
 )
 
+//go:embed btfhub/constants.json
+var btfhubConstants []byte
+
 // BTFHubConstantFetcher is a constant fetcher based on BTFHub constants
 type BTFHubConstantFetcher struct {
 	kernelVersion *kernel.Version
+	inStore       map[string]uint64
 	res           map[string]uint64
 }
 
@@ -34,18 +41,56 @@ var archMapping = map[string]string{
 }
 
 // NewBTFHubConstantFetcher returns a new BTFHubConstantFetcher
-func NewBTFHubConstantFetcher(kv *kernel.Version) *BTFHubConstantFetcher {
+func NewBTFHubConstantFetcher(kv *kernel.Version) (*BTFHubConstantFetcher, error) {
 	fetcher := &BTFHubConstantFetcher{
 		kernelVersion: kv,
+		inStore:       make(map[string]uint64),
 		res:           make(map[string]uint64),
 	}
 
-	kernelInfos, ok := NewKernelInfos(kv)
-	if ok {
-		fmt.Println(kernelInfos)
+	currentKernelInfos, ok := NewKernelInfos(kv)
+	if !ok {
+		return nil, errors.New("failed to collect current kernel infos")
 	}
 
-	return fetcher
+	fmt.Println(currentKernelInfos)
+
+	var constantsInfos []BTFHubConstantsInfo
+	if err := json.Unmarshal(btfhubConstants, &constantsInfos); err != nil {
+		return nil, err
+	}
+
+	for _, ci := range constantsInfos {
+		if ci.Distribution == currentKernelInfos.distribution && ci.DistribVersion == currentKernelInfos.distribVersion && ci.Arch == currentKernelInfos.arch && ci.UnameRelease == currentKernelInfos.unameRelease {
+			fetcher.inStore = ci.Constants
+			break
+		}
+	}
+
+	return fetcher, nil
+}
+
+func (f *BTFHubConstantFetcher) appendRequest(id string) {
+	if value, ok := f.inStore[id]; ok {
+		f.res[id] = value
+	} else {
+		f.res[id] = ErrorSentinel
+	}
+}
+
+// AppendSizeofRequest appends a sizeof request
+func (f *BTFHubConstantFetcher) AppendSizeofRequest(id, typeName, headerName string) {
+	f.appendRequest(id)
+}
+
+// AppendOffsetofRequest appends an offset request
+func (f *BTFHubConstantFetcher) AppendOffsetofRequest(id, typeName, fieldName, headerName string) {
+	f.appendRequest(id)
+}
+
+// FinishAndGetResults returns the results
+func (f *BTFHubConstantFetcher) FinishAndGetResults() (map[string]uint64, error) {
+	return f.res, nil
 }
 
 type kernelInfos struct {
