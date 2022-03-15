@@ -18,6 +18,7 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/security/ebpf/kernel"
 	"github.com/DataDog/datadog-agent/pkg/security/probe"
 	"github.com/DataDog/datadog-agent/pkg/security/probe/constantfetch"
+	utilKernel "github.com/DataDog/datadog-agent/pkg/util/kernel"
 )
 
 func main() {
@@ -39,9 +40,13 @@ func main() {
 	btfFileName := strings.TrimSuffix(archiveFileName, ".tar.xz")
 	btfPath := path.Join(tmpDir, btfFileName)
 
-	kv, err := kernel.NewKernelVersion()
+	releasePart := strings.Split(btfFileName, "-")[0]
+	kvCode, err := utilKernel.ParseReleaseString(releasePart)
 	if err != nil {
 		panic(err)
+	}
+	kv := &kernel.Version{
+		Code: kvCode,
 	}
 
 	fetcher := NewConstantCollector(btfPath)
