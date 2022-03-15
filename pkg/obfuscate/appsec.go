@@ -508,7 +508,7 @@ func walkObject(scanner *scanner, input string, i int, visit func(key, value str
 			return i, scanner.err
 		}
 	}
-	if keyFrom != -1 || valueFrom != -1 {
+	if keyFrom != -1 || valueFrom != -1 || i == len(input) {
 		return i, errUnexpectedEndOfString
 	}
 	return i, errUnexpectedType

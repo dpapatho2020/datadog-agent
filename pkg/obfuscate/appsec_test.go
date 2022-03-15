@@ -631,11 +631,12 @@ func TestObfuscateAppSecParameterKeyPath(t *testing.T) {
 
 func TestWalkObject(t *testing.T) {
 	for _, tc := range []struct {
-		name                        string
-		input                       string
-		expectedSeen                map[string]string
-		expectedSyntaxError         bool
-		expectedUnexpectedTypeError bool
+		name                               string
+		input                              string
+		expectedSeen                       map[string]string
+		expectedSyntaxError                bool
+		expectedUnexpectedTypeError        bool
+		expectedUnexpectedEndOfStringError bool
 	}{
 		{
 			name:         "flat",
@@ -658,14 +659,89 @@ func TestWalkObject(t *testing.T) {
 			expectedSeen: map[string]string{`"key"`: `"  value  "`},
 		},
 		{
-			name:         "flat",
+			name:         "nested-last-array",
 			input:        `{"key":["  value  "]}`,
 			expectedSeen: map[string]string{`"key"`: `["  value  "]`},
 		},
 		{
-			name:         "flat",
+			name:         "nested-last-array",
 			input:        `{"key":      [      "  value  "   ]      }`,
 			expectedSeen: map[string]string{`"key"`: `      [      "  value  "   ]      `},
+		},
+		{
+			name:         "nested-arrays",
+			input:        `{"key 1":      [      "  value 1  "   ]      ,  "key 2":      [      "  value 2  "   ]      ,  "key 3":      [      "  value 3  "   ]       }`,
+			expectedSeen: map[string]string{`"key 1"`: `      [      "  value 1  "   ]      `, `"key 2"`: `      [      "  value 2  "   ]      `, `"key 3"`: `      [      "  value 3  "   ]       `},
+		},
+		{
+			name:         "nested-objects",
+			input:        `{"key 1" :      {      "nested key 1": "nested  value 1  "   }      ,  "key 2":      {      "nested key 2"  : "nested  value 2  "   }      ,  "key 3":      {      "nested key 3"  : "nested  value 3  "   }       }`,
+			expectedSeen: map[string]string{`"key 1"`: `      {      "nested key 1": "nested  value 1  "   }      `, `"key 2"`: `      {      "nested key 2"  : "nested  value 2  "   }      `, `"key 3"`: `      {      "nested key 3"  : "nested  value 3  "   }       `},
+		},
+		{
+			name:         "nested-last-object",
+			input:        `{"key":{ "nested key "  : "nested  value   " }}`,
+			expectedSeen: map[string]string{`"key"`: `{ "nested key "  : "nested  value   " }`},
+		},
+		{
+			name:         "nested-last-object",
+			input:        `{"key":      {      "nested key "  : "nested  value   "   }      }`,
+			expectedSeen: map[string]string{`"key"`: `      {      "nested key "  : "nested  value   "   }      `},
+		},
+		{
+			name:                        "null",
+			input:                       "null",
+			expectedUnexpectedTypeError: true,
+		},
+		{
+			name:                        "array",
+			input:                       `[{"k":"v"}]`,
+			expectedUnexpectedTypeError: true,
+		},
+		{
+			name:                        "number",
+			input:                       `1`,
+			expectedUnexpectedTypeError: true,
+		},
+		{
+			name:                        "float",
+			input:                       `1.234`,
+			expectedUnexpectedTypeError: true,
+		},
+		{
+			name:                        "string",
+			input:                       `"1234"`,
+			expectedUnexpectedTypeError: true,
+		},
+		{
+			name:                               "unterminated-json",
+			input:                              `{"k":"v"`,
+			expectedUnexpectedEndOfStringError: true,
+		},
+		{
+			name:                               "unterminated-json",
+			input:                              `{"k":"v`,
+			expectedUnexpectedEndOfStringError: true,
+		},
+		{
+			name:                               "unterminated-json",
+			input:                              `{"k":`,
+			expectedUnexpectedEndOfStringError: true,
+		},
+		{
+			name:                               "unterminated-json",
+			input:                              `{"k"`,
+			expectedUnexpectedEndOfStringError: true,
+		},
+		{
+			name:                               "unterminated-json",
+			input:                              `{"k`,
+			expectedUnexpectedEndOfStringError: true,
+		},
+		{
+			name:                               "unterminated-json",
+			input:                              `{`,
+			expectedUnexpectedEndOfStringError: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -680,6 +756,8 @@ func TestWalkObject(t *testing.T) {
 				require.Equal(t, scanner.err, err)
 			} else if tc.expectedUnexpectedTypeError {
 				require.Equal(t, errUnexpectedType, err)
+			} else if tc.expectedUnexpectedEndOfStringError {
+				require.Equal(t, errUnexpectedEndOfString, err)
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, len(tc.input), i)
