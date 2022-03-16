@@ -119,13 +119,13 @@ func (c *treeWalkCollector) treeWalkerBuilder(prefix string) fs.WalkDirFunc {
 func extractConstantsFromBTF(archivePath string) (map[string]uint64, error) {
 	tmpDir, err := os.MkdirTemp("", "extract-dir")
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	defer os.RemoveAll(tmpDir)
 
 	extractCmd := exec.Command("tar", "xvf", archivePath, "-C", tmpDir)
 	if err := extractCmd.Run(); err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	archiveFileName := path.Base(archivePath)
@@ -160,6 +160,7 @@ func newConstantCollector(btfPath string) *constantCollector {
 
 var sizeRe = regexp.MustCompile(`size: (\d+), cachelines: \d+, members: \d+`)
 var offsetRe = regexp.MustCompile(`/\*\s*(\d+)\s*\d+\s*\*/`)
+var notFoundRe = regexp.MustCompile(`pahole: type '(\w+)' not found`)
 
 type constantRequest struct {
 	id                  string
@@ -189,25 +190,16 @@ func (c *constantCollector) FinishAndGetResults() (map[string]uint64, error) {
 	for _, r := range c.requests {
 		typeNames = append(typeNames, r.typeName)
 	}
-	typeNamesArg := strings.Join(typeNames, ",")
-
-	var btfArg string
-	if c.btfPath != "" {
-		btfArg = fmt.Sprintf("--btf_base=%s", c.btfPath)
-	}
-
-	cmd := exec.Command("pahole", typeNamesArg, btfArg)
-	cmd.Stdin = os.Stdin
-	output, err := cmd.Output()
+	output, err := loopRunPahole(c.btfPath, typeNames)
 	if err != nil {
 		exitErr := err.(*exec.ExitError)
 		fmt.Println(string(exitErr.Stderr))
-		panic(err)
+		return nil, err
 	}
 
 	perStruct := make(map[string]string)
 
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	scanner := bufio.NewScanner(strings.NewReader(output))
 
 	var currentTypeName string
 	var currentTypeContent string
@@ -286,4 +278,56 @@ func (pc *paholeCache) parsePaholeOutput(tyName string, lineF func(string) (uint
 		}
 	}
 	return constantfetch.ErrorSentinel
+}
+
+func loopRunPahole(btfPath string, typeNames []string) (string, error) {
+	typeMap := make(map[string]bool)
+	for _, ty := range typeNames {
+		typeMap[ty] = true
+	}
+
+	for {
+		paholeTyNames := make([]string, 0, len(typeMap))
+		for k, ok := range typeMap {
+			if ok {
+				paholeTyNames = append(paholeTyNames, k)
+			}
+		}
+
+		output, err := runPahole(btfPath, paholeTyNames)
+		if err != nil {
+			return "", err
+		}
+		scanner := bufio.NewScanner(strings.NewReader(output))
+		hasError := false
+		for scanner.Scan() {
+			line := scanner.Text()
+			if matches := notFoundRe.FindStringSubmatch(line); len(matches) != 0 {
+				errorTy := matches[1]
+				typeMap[errorTy] = false
+				hasError = true
+			}
+		}
+
+		if !hasError {
+			return output, nil
+		}
+	}
+}
+
+func runPahole(btfPath string, typeNames []string) (string, error) {
+	typeNamesArg := strings.Join(typeNames, ",")
+
+	var btfArg string
+	if btfPath != "" {
+		btfArg = fmt.Sprintf("--btf_base=%s", btfPath)
+	}
+
+	cmd := exec.Command("pahole", typeNamesArg, btfArg)
+	cmd.Stdin = os.Stdin
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", err
+	}
+	return string(output), nil
 }
