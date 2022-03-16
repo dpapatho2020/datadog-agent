@@ -266,7 +266,7 @@ func (cc *constantCollector) FinishAndGetResults() (map[string]uint64, error) {
 			constants[r.id] = value
 		} else {
 			value := pc.parsePaholeOutput(r.typeName, func(line string) (uint64, bool) {
-				if strings.Contains(line, r.fieldName+";") || strings.Contains(line, r.fieldName+"[") {
+				if strings.Contains(line, " "+r.fieldName+";") || strings.Contains(line, " "+r.fieldName+"[") {
 					if matches := offsetRe.FindStringSubmatch(line); len(matches) != 0 {
 						size, err := strconv.ParseUint(matches[1], 10, 64)
 						if err != nil {
