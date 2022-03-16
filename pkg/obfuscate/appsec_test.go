@@ -1,6 +1,7 @@
 package obfuscate
 
 import (
+	"encoding/json"
 	"regexp"
 	"testing"
 
@@ -9,11 +10,12 @@ import (
 )
 
 func TestObfuscateAppSec(t *testing.T) {
-	i := []struct {
+	for _, tc := range []struct {
 		name                string
 		input               string
 		expectedOutput      string
 		expectedSyntaxError bool
+		expectedError       bool
 	}{
 		{
 			name:           "object-empty",
@@ -47,8 +49,8 @@ func TestObfuscateAppSec(t *testing.T) {
 		},
 		{
 			name:           "object-many-parameters",
-			input:          `{ " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" }, { "value": " i am the second SENSITIVE_VALUE ! " }, { "value": " i am the third value ! " }, { "value": " i am the forth SENSITIVE_VALUE ! " } ] , " key 2 " : " value 2 " }`,
-			expectedOutput: `{ " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a ? value with many ?" }, { "value": " i am the second ? ! " }, { "value": " i am the third value ! " }, { "value": " i am the forth ? ! " } ] , " key 2 " : " value 2 " }`,
+			input:          `{ " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" }, "bad-type", { "value": " i am the second SENSITIVE_VALUE ! " }, 33, { "value": " i am the third value ! " }, { "value": " i am the forth SENSITIVE_VALUE ! " } ] , " key 2 " : " value 2 " }`,
+			expectedOutput: `{ " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a ? value with many ?" }, "bad-type", { "value": " i am the second ? ! " }, 33, { "value": " i am the third value ! " }, { "value": " i am the forth ? ! " } ] , " key 2 " : " value 2 " }`,
 		},
 		{
 			name:           "object-nested",
@@ -83,8 +85,8 @@ func TestObfuscateAppSec(t *testing.T) {
 		{
 			// The key regexp should take precedence over the value regexp and obfuscate the entire values
 			name:           "sensitive-key",
-			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"k3"],"highlight":["highlighted SENSITIVE_VALUE value 1","highlighted SENSITIVE_VALUE value 2","highlighted SENSITIVE_VALUE value 3"],"value":"the entire SENSITIVE_VALUE value"}]}]}]}`,
-			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"k3"],"highlight":["?","?","?"],"value":"?"}]}]}]}`,
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"SENSITIVE_KEY"],"highlight":["highlighted SENSITIVE_VALUE value 1","highlighted SENSITIVE_VALUE value 2","highlighted SENSITIVE_VALUE value 3"],"value":"the entire SENSITIVE_VALUE value"}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"SENSITIVE_KEY"],"highlight":["?","?","?"],"value":"?"}]}]}]}`,
 		},
 		{
 			// The key regexp doesn't match and the value regexp does and obfuscates accordingly.
@@ -96,6 +98,7 @@ func TestObfuscateAppSec(t *testing.T) {
 			name:           "unexpected-json-empty-value",
 			input:          ``,
 			expectedOutput: ``,
+			expectedError:  true,
 		},
 		{
 			name:           "unexpected-json-null-value",
@@ -215,28 +218,49 @@ func TestObfuscateAppSec(t *testing.T) {
 			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted SENSITIVE_VALUE value 1","highlighted SENSITIVE_VALUE value 2","highlighted SENSITIVE_VALUE value 3"],"value":""}]}]}]}`,
 			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"],"value":""}]}]}]}`,
 		},
-	}
-	for _, tc := range i {
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			o := appsecEventsObfuscator{
-				keyRE:   regexp.MustCompile("SENSITIVE_KEY"),
-				valueRE: regexp.MustCompile("SENSITIVE_VALUE"),
-			}
-			output, err := o.obfuscateAppSec(tc.input)
-			if err != nil {
-				if tc.expectedSyntaxError {
-					_, ok := err.(*SyntaxError)
-					require.True(t, ok)
-				} else {
-					require.NoError(t, err)
+			t.Run("enabled", func(t *testing.T) {
+				o := appsecEventsObfuscator{
+					keyRE:   regexp.MustCompile("SENSITIVE_KEY"),
+					valueRE: regexp.MustCompile("SENSITIVE_VALUE"),
 				}
-			}
-			require.Equal(t, tc.expectedOutput, output)
+				output, err := o.obfuscate(tc.input)
+				if err != nil {
+					if tc.expectedSyntaxError {
+						_, ok := err.(*SyntaxError)
+						require.True(t, ok)
+					} else if tc.expectedError {
+						require.Error(t, err)
+					} else {
+						require.NoError(t, err)
+					}
+				}
+				require.Equal(t, tc.expectedOutput, output)
+			})
+
+			t.Run("disabled", func(t *testing.T) {
+				o := appsecEventsObfuscator{
+					// Disabled via nil regular expressions
+				}
+				output, err := o.obfuscate(tc.input)
+				if err != nil {
+					if tc.expectedSyntaxError {
+						_, ok := err.(*SyntaxError)
+						require.True(t, ok)
+					} else if tc.expectedError {
+						require.Error(t, err)
+					} else {
+						require.NoError(t, err)
+					}
+				}
+				require.Equal(t, tc.input, output)
+			})
 		})
 	}
 }
 
-func TestObfuscateAppSecParameter(t *testing.T) {
+func TestObfuscateRuleMatchParameter(t *testing.T) {
 	i := []struct {
 		name                          string
 		input                         string
@@ -339,11 +363,11 @@ func TestObfuscateAppSecParameter(t *testing.T) {
 				keyRE:   regexp.MustCompile("SENSITIVE_KEY"),
 				valueRE: regexp.MustCompile("SENSITIVE_VALUE"),
 			}
-			var diff Diff
+			var diff inputDiff
 			scanner := &scanner{}
 			scanner.reset()
-			_, err := o.obfuscateAppSecRuleParameter(scanner, tc.input, 0, &diff)
-			output := diff.Apply(tc.input)
+			_, err := o.obfuscateRuleMatchParameter(scanner, tc.input, 0, &diff)
+			output := diff.apply(tc.input)
 			if err != nil {
 				if tc.expectedSyntaxError {
 					require.Equal(t, scanner.err, err)
@@ -357,88 +381,79 @@ func TestObfuscateAppSecParameter(t *testing.T) {
 				require.Empty(t, diff)
 				require.Equal(t, tc.expectedOutput, output)
 			} else {
-				output := diff.Apply(tc.input)
+				output := diff.apply(tc.input)
 				require.Equal(t, tc.expectedOutput, output)
 			}
 		})
 	}
 }
 
-func TestObfuscateAppSecParameterValue(t *testing.T) {
+func TestObfuscateRuleMatchParameterValue(t *testing.T) {
 	i := []struct {
-		name                          string
-		input                         string
-		expectedSyntaxError           bool
-		unexpectedScannerOpError      bool
-		expectOutput                  string
-		expectedUnexpectedEndOfString bool
+		name            string
+		input           string
+		expectedOutput  string
+		expectedIgnored bool
 	}{
 		{
-			name:         "one-sensitive-value",
-			input:        `"i am a SENSITIVE_VALUE value"`,
-			expectOutput: `"i am a ? value"`,
+			name:           "one-sensitive-value",
+			input:          `"i am a SENSITIVE_VALUE value"`,
+			expectedOutput: `"i am a ? value"`,
 		},
 		{
-			name:         "many-sensitive-values",
-			input:        `"SENSITIVE_VALUE i am a SENSITIVE_VALUE value SENSITIVE_VALUE"`,
-			expectOutput: `"? i am a ? value ?"`,
+			name:           "many-sensitive-values",
+			input:          `"SENSITIVE_VALUE i am a SENSITIVE_VALUE value SENSITIVE_VALUE"`,
+			expectedOutput: `"? i am a ? value ?"`,
 		},
 		{
-			name:         "many-sensitive-values",
-			input:        `"      SENSITIVE_VALUE i am a      SENSITIVE_VALUE value      SENSITIVE_VALUE     "`,
-			expectOutput: `"      ? i am a      ? value      ?     "`,
+			name:           "many-sensitive-values",
+			input:          `"      SENSITIVE_VALUE i am a      SENSITIVE_VALUE value      SENSITIVE_VALUE     "`,
+			expectedOutput: `"      ? i am a      ? value      ?     "`,
 		},
 		{
-			name:         "no-sensitive-values",
-			input:        `"i am just a value"`,
-			expectOutput: `"i am just a value"`,
+			name:           "no-sensitive-values",
+			input:          `"i am just a value"`,
+			expectedOutput: `"i am just a value"`,
 		},
 		{
-			name:         "empty-json-string",
-			input:        `""`,
-			expectOutput: `""`,
+			name:           "empty-json-string",
+			input:          `""`,
+			expectedOutput: `""`,
 		},
 		{
-			name:                          "unterminated-json-string",
-			input:                         `"i am a SENSITIVE_VALUE value`,
-			expectOutput:                  `"i am a SENSITIVE_VALUE value`,
-			expectedUnexpectedEndOfString: true,
+			name:            "unterminated-json-string",
+			input:           `"i am a SENSITIVE_VALUE value`,
+			expectedIgnored: true,
 		},
 		{
-			name:                     "empty-string",
-			input:                    ``,
-			expectOutput:             ``,
-			unexpectedScannerOpError: true,
+			name:            "empty-string",
+			input:           ``,
+			expectedIgnored: true,
 		},
 		{
-			name:                     "null",
-			input:                    `null`,
-			expectOutput:             `null`,
-			unexpectedScannerOpError: true,
+			name:            "null",
+			input:           `null`,
+			expectedIgnored: true,
 		},
 		{
-			name:                     "object",
-			input:                    `{"k":"v"}`,
-			expectOutput:             `{"k":"v"}`,
-			unexpectedScannerOpError: true,
+			name:            "object",
+			input:           `{"k":"v"}`,
+			expectedIgnored: true,
 		},
 		{
-			name:                     "array",
-			input:                    `[1,2,"three"]`,
-			expectOutput:             `[1,2,"three"]`,
-			unexpectedScannerOpError: true,
+			name:            "array",
+			input:           `[1,2,"three"]`,
+			expectedIgnored: true,
 		},
 		{
-			name:                     "float",
-			input:                    `1.5`,
-			expectOutput:             `1.5`,
-			unexpectedScannerOpError: true,
+			name:            "float",
+			input:           `1.5`,
+			expectedIgnored: true,
 		},
 		{
-			name:                "syntax-error",
-			input:               `"i am a SENSITIVE_VALUE \ `,
-			expectOutput:        `"i am a SENSITIVE_VALUE \ `,
-			expectedSyntaxError: true,
+			name:            "syntax-error",
+			input:           `"i am a SENSITIVE_VALUE \ `,
+			expectedIgnored: true,
 		},
 	}
 	for _, tc := range i {
@@ -455,30 +470,15 @@ func TestObfuscateAppSecParameterValue(t *testing.T) {
 						keyRE:   regexp.MustCompile("SENSITIVE_KEY"),
 						valueRE: regexp.MustCompile("SENSITIVE_VALUE"),
 					}
-					var diff Diff
-					scanner := &scanner{}
-					scanner.reset()
-					_, err := o.obfuscateAppSecParameterValue_(scanner, tc.input, 0, &diff, hasSensitiveKey)
-					output := diff.Apply(tc.input)
-					if err != nil {
-						if tc.expectedSyntaxError {
-							require.Equal(t, scanner.err, err)
-						} else if tc.unexpectedScannerOpError {
-							require.Equal(t, tc.unexpectedScannerOpError, err)
-						} else if tc.expectedUnexpectedEndOfString {
-							require.Equal(t, errUnexpectedEndOfString, err)
-						} else {
-							require.NoError(t, err)
-						}
-						require.Empty(t, diff)
-						require.Equal(t, tc.expectOutput, output)
+					var diff inputDiff
+					o.obfuscateRuleMatchParameterValue(tc.input, &diff, hasSensitiveKey)
+					output := diff.apply(tc.input)
+					if tc.expectedIgnored {
+						require.Equal(t, tc.input, output)
+					} else if hasSensitiveKey {
+						require.Equal(t, `"?"`, output)
 					} else {
-						output := diff.Apply(tc.input)
-						if hasSensitiveKey {
-							require.Equal(t, `"?"`, output)
-						} else {
-							require.Equal(t, tc.expectOutput, output)
-						}
+						require.Equal(t, tc.expectedOutput, output)
 					}
 				})
 			}
@@ -486,15 +486,12 @@ func TestObfuscateAppSecParameterValue(t *testing.T) {
 	}
 }
 
-func TestObfuscateAppSecParameterHighlight(t *testing.T) {
+func TestObfuscateRuleMatchParameterHighlights(t *testing.T) {
 	i := []struct {
 		name                           string
 		input                          string
-		expectedSyntaxError            bool
-		unexpectedScannerOpError       bool
 		expectedOutput                 string
 		expectedOutputWithSensitiveKey string
-		expectedUnexpectedEndOfString  bool
 	}{
 		{
 			name:                           "one-sensitive-value",
@@ -533,40 +530,40 @@ func TestObfuscateAppSecParameterHighlight(t *testing.T) {
 			expectedOutputWithSensitiveKey: `["?"]`,
 		},
 		{
-			name:                          "unterminated-json-string",
-			input:                         `["i am a SENSITIVE_VALUE value`,
-			expectedOutput:                `["i am a SENSITIVE_VALUE value`,
-			expectedUnexpectedEndOfString: true,
+			name:                           "unterminated-json-string",
+			input:                          `["i am a SENSITIVE_VALUE value`,
+			expectedOutput:                 `["i am a SENSITIVE_VALUE value`,
+			expectedOutputWithSensitiveKey: `["i am a SENSITIVE_VALUE value`,
 		},
 		{
-			name:                     "empty-string",
-			input:                    ``,
-			expectedOutput:           ``,
-			unexpectedScannerOpError: true,
+			name:                           "empty-string",
+			input:                          ``,
+			expectedOutput:                 ``,
+			expectedOutputWithSensitiveKey: ``,
 		},
 		{
-			name:                     "null",
-			input:                    `null`,
-			expectedOutput:           `null`,
-			unexpectedScannerOpError: true,
+			name:                           "null",
+			input:                          `null`,
+			expectedOutput:                 `null`,
+			expectedOutputWithSensitiveKey: `null`,
 		},
 		{
-			name:                     "object",
-			input:                    `{}`,
-			expectedOutput:           `{}`,
-			unexpectedScannerOpError: true,
+			name:                           "object",
+			input:                          `{}`,
+			expectedOutput:                 `{}`,
+			expectedOutputWithSensitiveKey: `{}`,
 		},
 		{
-			name:                     "float",
-			input:                    `1.5`,
-			expectedOutput:           `1.5`,
-			unexpectedScannerOpError: true,
+			name:                           "float",
+			input:                          `1.5`,
+			expectedOutput:                 `1.5`,
+			expectedOutputWithSensitiveKey: `1.5`,
 		},
 		{
-			name:                "syntax-error",
-			input:               `["i am a SENSITIVE_VALUE \ `,
-			expectedOutput:      `["i am a SENSITIVE_VALUE \ `,
-			expectedSyntaxError: true,
+			name:                           "syntax-error",
+			input:                          `["i am a SENSITIVE_VALUE \ `,
+			expectedOutput:                 `["i am a SENSITIVE_VALUE \ `,
+			expectedOutputWithSensitiveKey: `["i am a SENSITIVE_VALUE \ `,
 		},
 	}
 	for _, tc := range i {
@@ -583,30 +580,15 @@ func TestObfuscateAppSecParameterHighlight(t *testing.T) {
 						keyRE:   regexp.MustCompile("SENSITIVE_KEY"),
 						valueRE: regexp.MustCompile("SENSITIVE_VALUE"),
 					}
-					var diff Diff
+					var diff inputDiff
 					scanner := &scanner{}
 					scanner.reset()
-					_, err := o.obfuscateAppSecParameterHighlight_(scanner, tc.input, 0, &diff, hasSensitiveKey)
-					output := diff.Apply(tc.input)
-					if err != nil {
-						if tc.expectedSyntaxError {
-							require.Equal(t, scanner.err, err)
-						} else if tc.unexpectedScannerOpError {
-							require.Equal(t, tc.unexpectedScannerOpError, err)
-						} else if tc.expectedUnexpectedEndOfString {
-							require.Equal(t, errUnexpectedEndOfString, err)
-						} else {
-							require.NoError(t, err)
-						}
-						require.Empty(t, diff)
-						require.Equal(t, tc.expectedOutput, output)
+					o.obfuscateRuleMatchParameterHighlights(tc.input, &diff, hasSensitiveKey)
+					output := diff.apply(tc.input)
+					if hasSensitiveKey {
+						require.Equal(t, tc.expectedOutputWithSensitiveKey, output)
 					} else {
-						output := diff.Apply(tc.input)
-						if hasSensitiveKey {
-							require.Equal(t, tc.expectedOutputWithSensitiveKey, output)
-						} else {
-							require.Equal(t, tc.expectedOutput, output)
-						}
+						require.Equal(t, tc.expectedOutput, output)
 					}
 				})
 			}
@@ -614,13 +596,11 @@ func TestObfuscateAppSecParameterHighlight(t *testing.T) {
 	}
 }
 
-func TestObfuscateAppSecParameterKeyPath(t *testing.T) {
+func TestHasSentitiveKeyPath(t *testing.T) {
 	for _, tc := range []struct {
-		name                     string
-		input                    string
-		expectedSyntaxError      bool
-		unexpectedScannerOpError bool
-		expectedSensitiveKey     bool
+		name                 string
+		input                string
+		expectedSensitiveKey bool
 	}{
 		{
 			name:                 "flat",
@@ -693,34 +673,34 @@ func TestObfuscateAppSecParameterKeyPath(t *testing.T) {
 			expectedSensitiveKey: true,
 		},
 		{
-			name:                "syntax-error",
-			input:               `[ 1,2,3,"four",5, [ { "key_path": [ "SENSITIVE_KEY" ] } ], [{},[{},[{},[{},[{},[{}]]]]]], "SENSITIVE_KEY" 6]`,
-			expectedSyntaxError: true,
+			name:                 "syntax-error",
+			input:                `[ 1,2,3,"four",5, [ { "key_path": [ "SENSITIVE_KEY" ] } ], [{},[{},[{},[{},[{},[{}]]]]]], "SENSITIVE_KEY" 6]`,
+			expectedSensitiveKey: true,
 		},
 		{
-			name:                "syntax-error",
-			input:               `[ 1,2,3,"four",5, [ { [ "SENSITIVE_KEY" ] } ], [{},[{},[{},[{},[{},[{}]]]]]], "SENSITIVE_KEY", 6]`,
-			expectedSyntaxError: true,
+			name:                 "syntax-error",
+			input:                `[ 1,2,3,"four",5, [ { [ "SENSITIVE_KEY" ] } ], [{},[{},[{},[{},[{},[{}]]]]]], "SENSITIVE_KEY", 6]`,
+			expectedSensitiveKey: false,
 		},
 		{
-			name:                     "null",
-			input:                    `null`,
-			unexpectedScannerOpError: true,
+			name:                 "null",
+			input:                `null`,
+			expectedSensitiveKey: false,
 		},
 		{
-			name:                     "object",
-			input:                    `{}`,
-			unexpectedScannerOpError: true,
+			name:                 "object",
+			input:                `{}`,
+			expectedSensitiveKey: false,
 		},
 		{
-			name:                     "unterminated",
-			input:                    `[ "SENSITIVE_KEY"`,
-			unexpectedScannerOpError: true,
+			name:                 "unterminated",
+			input:                `[ "SENSITIVE_KEY"`,
+			expectedSensitiveKey: true,
 		},
 		{
-			name:                "syntax-error",
-			input:               `[ "SENSITIVE_KEY"" ]`,
-			expectedSyntaxError: true,
+			name:                 "syntax-error",
+			input:                `[ "SENSITIVE_KEY"" ]`,
+			expectedSensitiveKey: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -728,17 +708,7 @@ func TestObfuscateAppSecParameterKeyPath(t *testing.T) {
 				keyRE:   regexp.MustCompile("SENSITIVE_KEY"),
 				valueRE: regexp.MustCompile("SENSITIVE_VALUE"),
 			}
-			scanner := &scanner{}
-			scanner.reset()
-			hasSensitiveKey, i, err := o.obfuscateAppSecParameterKeyPath_(scanner, tc.input, 0)
-			if tc.expectedSyntaxError {
-				require.Equal(t, scanner.err, err)
-			} else if tc.unexpectedScannerOpError {
-				require.Equal(t, tc.unexpectedScannerOpError, err)
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, len(tc.input), i)
-			}
+			hasSensitiveKey := o.hasSensitiveKeyPath(tc.input)
 			require.Equal(t, tc.expectedSensitiveKey, hasSensitiveKey)
 		})
 	}
@@ -882,4 +852,111 @@ func TestWalkObject(t *testing.T) {
 			}
 		})
 	}
+}
+
+func obfuscatorWithJSONParsing(keyRE, valueRE *regexp.Regexp, val string) string {
+	if keyRE == nil && valueRE == nil {
+		return val
+	}
+
+	var appsecMeta interface{}
+	if err := json.Unmarshal([]byte(val), &appsecMeta); err != nil {
+		return val
+	}
+
+	meta, ok := appsecMeta.(map[string]interface{})
+	if !ok {
+		return val
+	}
+
+	triggers, ok := meta["triggers"].([]interface{})
+	if !ok {
+		return val
+	}
+
+	var sensitiveDataFound bool
+	for _, trigger := range triggers {
+		trigger, ok := trigger.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		ruleMatches, ok := trigger["rule_matches"].([]interface{})
+		if !ok {
+			continue
+		}
+		for _, ruleMatch := range ruleMatches {
+			ruleMatch, ok := ruleMatch.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			parameters, ok := ruleMatch["parameters"].([]interface{})
+			if !ok {
+				continue
+			}
+			for _, param := range parameters {
+				param, ok := param.(map[string]interface{})
+				if !ok {
+					continue
+				}
+
+				paramValue, hasStrValue := param["value"].(string)
+				highlight, _ := param["highlight"].([]interface{})
+				keyPath, _ := param["key_path"].([]interface{})
+
+				var sensitiveKeyFound bool
+				for _, key := range keyPath {
+					str, ok := key.(string)
+					if !ok {
+						continue
+					}
+					if !matchString(keyRE, str) {
+						continue
+					}
+					sensitiveKeyFound = true
+					for i, v := range highlight {
+						if _, ok := v.(string); ok {
+							highlight[i] = "?"
+						}
+					}
+					if hasStrValue {
+						param["value"] = "?"
+					}
+					break
+				}
+
+				if sensitiveKeyFound {
+					sensitiveDataFound = true
+					continue
+				}
+
+				// Obfuscate the parameter value
+				if hasStrValue && matchString(valueRE, paramValue) {
+					sensitiveDataFound = true
+					param["value"] = valueRE.ReplaceAllString(paramValue, "?")
+				}
+
+				// Obfuscate the parameter highlights
+				for i, h := range highlight {
+					h, ok := h.(string)
+					if !ok {
+						continue
+					}
+					if matchString(valueRE, h) {
+						sensitiveDataFound = true
+						highlight[i] = valueRE.ReplaceAllString(h, "?")
+					}
+				}
+			}
+		}
+	}
+
+	if !sensitiveDataFound {
+		return val
+	}
+
+	newVal, err := json.Marshal(appsecMeta)
+	if err != nil {
+		return val
+	}
+	return string(newVal)
 }
