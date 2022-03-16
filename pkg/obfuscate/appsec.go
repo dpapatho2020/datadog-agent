@@ -7,7 +7,6 @@ package obfuscate
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -37,8 +36,6 @@ func (o *Obfuscator) ObfuscateAppSec(val string) string {
 type appsecEventsObfuscator struct {
 	keyRE, valueRE *regexp.Regexp
 }
-
-var errUnexpectedEndOfString = errors.New("unexpected end of appsec event string")
 
 type unexpectedScannerOpError int
 
@@ -445,7 +442,8 @@ func stepTo(scanner *scanner, input string, i int, to int) (int, error) {
 			return i + 1, nil
 		}
 	}
-	return i, errUnexpectedEndOfString
+	scanner.eof()
+	return i, scanner.err
 }
 
 // Helper function to step to one of the given expected scanner operations `to`.
@@ -466,7 +464,8 @@ func stepToOneOf(scanner *scanner, input string, i int, to ...int) (j int, op in
 			return i + 1, op, scanner.err
 		}
 	}
-	return i, 0, errUnexpectedEndOfString
+	scanner.eof()
+	return i, 0, scanner.err
 }
 
 // Helper function to keep scanning until the scanner operation `until` is
@@ -482,7 +481,8 @@ func stepUntil(scanner *scanner, input string, i int, until int) (int, error) {
 			return i + 1, nil
 		}
 	}
-	return i, errUnexpectedEndOfString
+	scanner.eof()
+	return i, scanner.err
 }
 
 // Helper function to scan the string value of the given input. It returns the
