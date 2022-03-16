@@ -954,3 +954,12 @@ func obfuscatorWithJSONParsing(keyRE, valueRE *regexp.Regexp, val string) string
 	}
 	return string(newVal)
 }
+
+// matchString is a helper function returning false when the regexp is nil and
+// otherwise calling the regular expression to match the string.
+func matchString(re *regexp.Regexp, s string) bool {
+	if re == nil {
+		return false
+	}
+	return re.MatchString(s)
+}

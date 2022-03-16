@@ -280,7 +280,7 @@ func (o *appsecEventsObfuscator) obfuscateRuleMatchParameterHighlights(input str
 		if err != nil {
 			return
 		}
-		if !matchString(o.valueRE, value) {
+		if !o.valueRE.MatchString(value) {
 			return
 		}
 		value = o.valueRE.ReplaceAllString(value, "?")
@@ -317,7 +317,7 @@ func (o *appsecEventsObfuscator) obfuscateRuleMatchParameterValue(input string, 
 	if err != nil {
 		return
 	}
-	if !matchString(o.valueRE, value) {
+	if !o.valueRE.MatchString(value) {
 		return
 	}
 	value = o.valueRE.ReplaceAllString(value, "?")
@@ -537,13 +537,4 @@ func unquote(s string) (t string, err error) {
 func quote(s string) (t string, err error) {
 	buf, err := json.Marshal(s)
 	return string(buf), err
-}
-
-// matchString is a helper function returning false when the regexp is nil and
-// otherwise calling the regular expression to match the string.
-func matchString(re *regexp.Regexp, s string) bool {
-	if re == nil {
-		return false
-	}
-	return re.MatchString(s)
 }
