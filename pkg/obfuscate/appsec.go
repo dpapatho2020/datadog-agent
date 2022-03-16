@@ -23,125 +23,23 @@ func (o *Obfuscator) ObfuscateAppSec(val string) string {
 	if keyRE == nil && valueRE == nil {
 		return val
 	}
-
-	var appsecMeta interface{}
-	if err := json.Unmarshal([]byte(val), &appsecMeta); err != nil {
-		o.log.Errorf("Could not parse the appsec span tag as a json value: %s", err)
-		return val
+	ob := appsecEventsObfuscator{
+		keyRE:   keyRE,
+		valueRE: valueRE,
 	}
-
-	meta, ok := appsecMeta.(map[string]interface{})
-	if !ok {
-		return val
-	}
-
-	triggers, ok := meta["triggers"].([]interface{})
-	if !ok {
-		return val
-	}
-
-	var sensitiveDataFound bool
-	for _, trigger := range triggers {
-		trigger, ok := trigger.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		ruleMatches, ok := trigger["rule_matches"].([]interface{})
-		if !ok {
-			continue
-		}
-		for _, ruleMatch := range ruleMatches {
-			ruleMatch, ok := ruleMatch.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			parameters, ok := ruleMatch["parameters"].([]interface{})
-			if !ok {
-				continue
-			}
-			for _, param := range parameters {
-				param, ok := param.(map[string]interface{})
-				if !ok {
-					continue
-				}
-
-				paramValue, hasStrValue := param["value"].(string)
-				highlight, _ := param["highlight"].([]interface{})
-				keyPath, _ := param["key_path"].([]interface{})
-
-				var sensitiveKeyFound bool
-				for _, key := range keyPath {
-					str, ok := key.(string)
-					if !ok {
-						continue
-					}
-					if !matchString(keyRE, str) {
-						continue
-					}
-					sensitiveKeyFound = true
-					for i, v := range highlight {
-						if _, ok := v.(string); ok {
-							highlight[i] = "?"
-						}
-					}
-					if hasStrValue {
-						param["value"] = "?"
-					}
-					break
-				}
-
-				if sensitiveKeyFound {
-					sensitiveDataFound = true
-					continue
-				}
-
-				// Obfuscate the parameter value
-				if hasStrValue && matchString(valueRE, paramValue) {
-					sensitiveDataFound = true
-					param["value"] = valueRE.ReplaceAllString(paramValue, "?")
-				}
-
-				// Obfuscate the parameter highlights
-				for i, h := range highlight {
-					h, ok := h.(string)
-					if !ok {
-						continue
-					}
-					if matchString(valueRE, h) {
-						sensitiveDataFound = true
-						highlight[i] = valueRE.ReplaceAllString(h, "?")
-					}
-				}
-			}
-		}
-	}
-
-	if !sensitiveDataFound {
-		return val
-	}
-
-	newVal, err := json.Marshal(appsecMeta)
+	output, err := ob.obfuscate(val)
 	if err != nil {
-		o.log.Errorf("Could not marshal the obfuscated appsec span tag into a json value: %s", err)
+		o.log.Errorf("unexpected error while obfuscating the appsec events: %v", err)
 		return val
 	}
-	return string(newVal)
-}
-
-func matchString(re *regexp.Regexp, s string) bool {
-	if re == nil {
-		return false
-	}
-	return re.MatchString(s)
+	return output
 }
 
 type appsecEventsObfuscator struct {
 	keyRE, valueRE *regexp.Regexp
 }
 
-var (
-	errUnexpectedEndOfString = errors.New("unexpected end of appsec event string")
-)
+var errUnexpectedEndOfString = errors.New("unexpected end of appsec event string")
 
 type unexpectedScannerOpError int
 
@@ -149,182 +47,17 @@ func (err unexpectedScannerOpError) Error() string {
 	return fmt.Sprintf("unexpected json scanner operation %d", err)
 }
 
-func (o *appsecEventsObfuscator) obfuscateAppSec(input string) (output string, err error) {
-	var (
-		scanner scanner
-		diff    Diff
-	)
-	scanner.reset()
-	keyFrom := -1
-	keyTo := -1
-	for i := 0; i < len(input); i++ {
-		switch scanner.step(&scanner, input[i]) {
-		case scanError:
-			return input, scanner.err
-
-		case scanBeginLiteral:
-			if input[i] == '"' {
-				keyFrom = i
-			}
-		case scanContinue:
-			if keyFrom != -1 && input[i] == '"' && input[i-1] != '\\' {
-				keyTo = i
-			}
-		case scanObjectKey:
-			if input[keyFrom:keyTo+1] == `"parameters"` {
-				i, _ = o.obfuscateAppSecParameters(&scanner, input, i+1, &diff)
-				i--
-			}
-			keyFrom = -1
-			keyTo = -1
-		}
-	}
-	if scanner.eof() == scanError {
-		return input, scanner.err
-	}
-	return diff.Apply(input), nil
-}
-
-func (o *appsecEventsObfuscator) obfuscateAppSecParameters(scanner *scanner, input string, i int, diff *Diff) (int, error) {
-	i, err := stepTo(scanner, input, i, scanBeginArray)
-	if err != nil {
-		return i, err
-	}
-	for ; i < len(input); i++ {
-		i, err = o.obfuscateAppSecRuleParameter(scanner, input, i, diff)
-		if err != nil {
-			if actual, ok := err.(unexpectedScannerOpError); ok {
-				if actual == scanEndArray {
-					return i, nil
-				}
-				i, err = stepUntil(scanner, input, i, scanArrayValue)
-				if err != nil {
-					return i, err
-				}
-				continue
-			}
-			return i, err
-		}
-		var op int
-		i, op, err = stepToOneOf(scanner, input, i, scanArrayValue, scanEndArray)
-		if err != nil {
-			return i, err
-		}
-		if op == scanEndArray {
-			return i, nil
-		}
-	}
-	return i, errUnexpectedEndOfString
-}
-
-func (o *appsecEventsObfuscator) obfuscateAppSecRuleParameter(scanner *scanner, input string, i int, diff *Diff) (int, error) {
-	var (
-		paramKeyPath                         string
-		paramValueFrom, paramValueTo         int
-		paramHighlightFrom, paramHighlightTo int
-	)
-	i, err := walkObject(scanner, input, i, func(keyFrom, keyTo int, valueFrom, valueTo int) {
-		switch input[keyFrom:keyTo] {
-		case `"key_path"`:
-			paramKeyPath = input[valueFrom:valueTo]
-		case `"value"`:
-			paramValueFrom = valueFrom
-			paramValueTo = valueTo
-		case `"highlight"`:
-			paramHighlightFrom = valueFrom
-			paramHighlightTo = valueTo
-		}
-	})
-	if err != nil {
-		return i, err
-	}
-	var hasSensitiveKey bool
-	if paramKeyPath != "" {
-		hasSensitiveKey = o.obfuscateAppSecParameterKeyPath(paramKeyPath)
-	}
-	if paramHighlight := input[paramHighlightFrom:paramHighlightTo]; paramHighlight != "" {
-		o.obfuscateAppSecParameterHighlight(paramHighlight, diff, paramHighlightFrom, hasSensitiveKey)
-	}
-	if paramValue := input[paramValueFrom:paramValueTo]; paramValue != "" {
-		o.obfuscateAppSecParameterValue(paramValue, diff, paramValueFrom, hasSensitiveKey)
-	}
-	return i, nil
-}
-
-func (o *appsecEventsObfuscator) obfuscateAppSecParameterKeyPath(input string) (hasSensitiveKey bool) {
-	var scanner scanner
-	scanner.reset()
-	hasSensitiveKey, _, _ = o.obfuscateAppSecParameterKeyPath_(&scanner, input, 0)
-	return
-}
-
-func (o *appsecEventsObfuscator) obfuscateAppSecParameterKeyPath_(scanner *scanner, input string, i int) (hasSensitiveKey bool, j int, err error) {
-	i, err = obfuscateArrayStrings(scanner, input, i, func(from, to int) {
-		// Ignore the call if we already found a sensitive key in a previous call
-		if hasSensitiveKey {
-			return
-		}
-		value := input[from : to+1]
-		value, err := unquote(value)
-		if err != nil {
-			return
-		}
-		if matchString(o.keyRE, value) {
-			hasSensitiveKey = true
-		}
-	})
-	if err != nil {
-		return false, i, err
-	}
-	return hasSensitiveKey, i, nil
-}
-
-func (o *appsecEventsObfuscator) obfuscateAppSecParameterHighlight(input string, diff *Diff, diffOffset int, hasSensitiveKey bool) error {
-	var (
-		scanner scanner
-		tmpDiff Diff
-	)
-	scanner.reset()
-	_, err := o.obfuscateAppSecParameterHighlight_(&scanner, input, 0, &tmpDiff, hasSensitiveKey)
-	if err != nil {
-		return err
-	}
-	tmpDiff.AppendTo(diff, diffOffset)
-	return nil
-}
-
-func (o *appsecEventsObfuscator) obfuscateAppSecParameterHighlight_(scanner *scanner, input string, i int, diff *Diff, hasSensitiveKey bool) (int, error) {
-	i, err := obfuscateArrayStrings(scanner, input, i, func(from, to int) {
-		if hasSensitiveKey {
-			diff.Add(from, to, `"?"`)
-			return
-		}
-		value, err := unquote(input[from : to+1])
-		if err != nil {
-			return
-		}
-		if !matchString(o.valueRE, value) {
-			return
-		}
-		value = o.valueRE.ReplaceAllString(value, "?")
-		value, err = quote(value)
-		if err != nil {
-			return
-		}
-		diff.Add(from, to, value)
-	})
-	if err != nil {
-		return i, err
-	}
-	return i, nil
-}
-
-type Diff []struct {
+// inputDiff holds the list of diffs, built by the obfuscator, and to ultimately
+// apply to the input.
+type inputDiff []struct {
 	from, to int
 	value    string
 }
 
-func (d *Diff) Add(from, to int, value string) {
+// Add a new entry to the list. Note that due to how the apply() method works
+// by creating the output string by walking this list, the list entries must be
+// sorted in ascending "input offset" order.
+func (d *inputDiff) add(from, to int, value string) {
 	elt := struct {
 		from  int
 		to    int
@@ -347,7 +80,8 @@ func (d *Diff) Add(from, to int, value string) {
 	(*d)[i] = elt
 }
 
-func (d Diff) Apply(input string) string {
+// Apply the diff to the input if any.
+func (d inputDiff) apply(input string) string {
 	from := 0
 	var output strings.Builder
 	for _, diff := range d {
@@ -359,29 +93,265 @@ func (d Diff) Apply(input string) string {
 	return output.String()
 }
 
-func (d *Diff) AppendTo(diff *Diff, offset int) {
+// Append the given diff to the current one, shifted by the given offset.
+// Cf. method obfuscateRuleMatchParameter()
+func (d *inputDiff) appendTo(diff *inputDiff, offset int) {
 	for _, d := range *d {
-		diff.Add(d.from+offset, d.to+offset, d.value)
+		diff.add(d.from+offset, d.to+offset, d.value)
 	}
 }
 
-func obfuscateArrayStrings(scanner *scanner, input string, i int, visit func(from, to int)) (int, error) {
+// Entrypoint of the appsec obfuscator based on a json scanner and which tries
+// to only obfuscate the appsec rule parameters of the given input by searching
+// and targeting objects of the form
+// `{ "parameters": <appsec rule match parameters>, <any other keys>: <any other values> }`
+// When such object is found, its parameters' value is obfuscated.
+func (o *appsecEventsObfuscator) obfuscate(input string) (output string, err error) {
+	var (
+		scanner scanner
+		diff    inputDiff
+	)
+	scanner.reset()
+	keyFrom := -1
+	keyTo := -1
+	// Scan the input to discover its objects and see if they have the
+	// `parameters` key we are looking for.
+	for i := 0; i < len(input); i++ {
+		switch scanner.step(&scanner, input[i]) {
+		case scanError:
+			return input, scanner.err
+
+		case scanBeginLiteral:
+			// Possibly the beginning of an object key
+			if input[i] == '"' {
+				keyFrom = i
+			}
+		case scanContinue:
+			// Continue the literal value
+			if keyFrom != -1 && input[i] == '"' && input[i-1] != '\\' {
+				// Ending double-quote found
+				keyTo = i
+				// Only scanObjetKey will confirm this was an object key
+			}
+		case scanObjectKey:
+			// Object key scanned and keyFrom and keyTo were set according to
+			// the previous scanBeginLiteral and scanContinue scanner operations
+			if input[keyFrom:keyTo+1] == `"parameters"` {
+				i = o.obfuscateRuleMatchParameters(&scanner, input, i+1, &diff)
+				i-- // decrement i due to the for loop increment but i is already set to the next byte to scan
+			}
+			keyFrom = -1
+			keyTo = -1
+		}
+	}
+	if scanner.eof() == scanError {
+		return input, scanner.err
+	}
+	return diff.apply(input), nil
+}
+
+// Obfuscate the array of parameters of the form `[ <parameter 1>, <...>, <parameter N> ]`.
+// The implementation accepts elements of unexpected types.
+func (o *appsecEventsObfuscator) obfuscateRuleMatchParameters(scanner *scanner, input string, i int, diff *inputDiff) int {
 	i, err := stepTo(scanner, input, i, scanBeginArray)
 	if err != nil {
+		return i
+	}
+	for ; i < len(input); i++ {
+		i, err = o.obfuscateRuleMatchParameter(scanner, input, i, diff)
+		if err != nil {
+			if actual, ok := err.(unexpectedScannerOpError); ok {
+				if actual == scanEndArray {
+					// The previous call failed because we reached the end of the array
+					return i
+				}
+				// Try to step until the next array value
+				i, err = stepUntil(scanner, input, i, scanArrayValue)
+				if err != nil {
+					return i
+				}
+				continue // Next value reached, and we can proceed trying to obfuscate it
+			}
+			return i // Abort due to an unexpected error (syntax error or end of json)
+		}
+		// Step to the beginning of the next array value or end of the array
+		var op int
+		i, op, err = stepToOneOf(scanner, input, i, scanArrayValue, scanEndArray)
+		if err != nil {
+			return i
+		}
+		if op == scanEndArray {
+			return i
+		}
+	}
+	return i
+}
+
+// Obfuscate the parameter object of the form `{ "key_path": <key path>, "highlight": <highlight>, "value": <value>, <any extra keys>: <any extra values> }`.
+// The implementation is permissive so that any extra keys and values are allowed, and permits having any of the three
+// keys `key_path`, `highlight` and `value` that we need to obfuscate.
+// Note that the overall parameter obfuscation directly depends on the presence of a sensitive key in the key_path.
+// As a result, the parameter object needs to be entirely walked to firstly find the key_path.
+func (o *appsecEventsObfuscator) obfuscateRuleMatchParameter(scanner *scanner, input string, i int, diff *inputDiff) (int, error) {
+	// Walk the object and save the `key_path` value along with the offsets of the
+	// `highlight` and `value` values, if any.
+	var (
+		paramKeyPath                         string
+		paramValueFrom, paramValueTo         int
+		paramHighlightFrom, paramHighlightTo int
+	)
+	i, err := walkObject(scanner, input, i, func(keyFrom, keyTo int, valueFrom, valueTo int) {
+		switch input[keyFrom:keyTo] {
+		case `"key_path"`:
+			paramKeyPath = input[valueFrom:valueTo]
+		case `"value"`:
+			paramValueFrom = valueFrom
+			paramValueTo = valueTo
+		case `"highlight"`:
+			paramHighlightFrom = valueFrom
+			paramHighlightTo = valueTo
+		}
+	})
+	if err != nil {
 		return i, err
+	}
+	// Firstly start by searching for any sensitive key into the key_path
+	var hasSensitiveKey bool
+	if paramKeyPath != "" {
+		hasSensitiveKey = o.hasSensitiveKeyPath(paramKeyPath)
+	}
+	// Finally, obfuscate the `highlight` and `value` values
+	if highlights := input[paramHighlightFrom:paramHighlightTo]; highlights != "" {
+		var tmpDiff inputDiff
+		o.obfuscateRuleMatchParameterHighlights(highlights, &tmpDiff, hasSensitiveKey)
+		tmpDiff.appendTo(diff, paramHighlightFrom)
+	}
+	if value := input[paramValueFrom:paramValueTo]; value != "" {
+		var tmpDiff inputDiff
+		o.obfuscateRuleMatchParameterValue(value, &tmpDiff, hasSensitiveKey)
+		tmpDiff.appendTo(diff, paramValueFrom)
+	}
+	return i, nil
+}
+
+// Return whether the given key path contains any sensitive key. A key is
+// considered sensitive when the key regular expression matches it. It only
+// applies to key path elements of string type.
+// The expected key path value is of the form `[ <path 1>, <...>, <path N> ]`.
+// The implementation is permissive so that any array value type is accepted.
+func (o *appsecEventsObfuscator) hasSensitiveKeyPath(keyPath string) (hasSensitiveKey bool) {
+	// Shortcut the call if the key regular expression is disabled
+	if o.keyRE == nil {
+		return false
+	}
+	// Walk the array values of type string
+	walkArrayStrings(keyPath, func(from, to int) {
+		// Ignore the call if we already found a sensitive key in a previous call
+		if hasSensitiveKey {
+			return
+		}
+		// Unquote the string and check if it matches the key regexp
+		value := keyPath[from : to+1]
+		value, err := unquote(value)
+		if err != nil {
+			return
+		}
+		if o.keyRE.MatchString(value) {
+			hasSensitiveKey = true
+		}
+	})
+	return hasSensitiveKey
+}
+
+// Obfuscate the parameter's array of highlighted strings of the form `[ <highlight 1>, <...>, <highlight N> ]`.
+// If a sensitive key was found, the value regular expression is ignored and every string value of the array is
+// obfuscated. It otherwise only obfuscates the sub-strings matching the value regular expression.
+// The implementation is permissive so that it accepts any value type and only obfuscates the strings.
+// Note that this obfuscator method is a bit different from the others due to the way obfuscateRuleMatchParameter()
+// works.
+func (o *appsecEventsObfuscator) obfuscateRuleMatchParameterHighlights(input string, diff *inputDiff, hasSensitiveKey bool) {
+	// Shortcut the call when the value regular expression is disabled and there
+	// is no sensitive key (which acts as a regexp obfuscating everything)
+	if o.valueRE == nil && !hasSensitiveKey {
+		return
+	}
+	walkArrayStrings(input, func(from, to int) {
+		if hasSensitiveKey {
+			diff.add(from, to, `"?"`)
+			return
+		}
+		value, err := unquote(input[from : to+1])
+		if err != nil {
+			return
+		}
+		if !matchString(o.valueRE, value) {
+			return
+		}
+		value = o.valueRE.ReplaceAllString(value, "?")
+		value, err = quote(value)
+		if err != nil {
+			return
+		}
+		diff.add(from, to, value)
+	})
+}
+
+// Obfuscate the parameter's value which is expected to be a string. If a
+// sensitive key was found, the value regular expression is ignored and the
+// entire string value is obfuscated. It otherwise only obfuscates the
+// sub-strings matching the value regular expression.
+// Note that this obfuscator method is a bit different from the others due to
+// the way obfuscateRuleMatchParameter() works.
+func (o *appsecEventsObfuscator) obfuscateRuleMatchParameterValue(input string, diff *inputDiff, hasSensitiveKey bool) {
+	// Shortcut the call when the value regular expression is disabled and there
+	// is no sensitive key (which acts as a regexp obfuscating everything)
+	if o.valueRE == nil && !hasSensitiveKey {
+		return
+	}
+	from, to, err := scanString(input)
+	if err != nil {
+		return
+	}
+	if hasSensitiveKey {
+		diff.add(from, to-1, `"?"`)
+		return
+	}
+	value := input[from:to]
+	value, err = unquote(value)
+	if err != nil {
+		return
+	}
+	if !matchString(o.valueRE, value) {
+		return
+	}
+	value = o.valueRE.ReplaceAllString(value, "?")
+	value, err = quote(value)
+	if err != nil {
+		return
+	}
+	diff.add(from, to-1, value)
+}
+
+// Helper function to walk the array elements of type string.
+func walkArrayStrings(input string, visit func(from int, to int)) {
+	var scanner scanner
+	scanner.reset()
+	i, err := stepTo(&scanner, input, 0, scanBeginArray)
+	if err != nil {
+		return
 	}
 	stringFrom := -1
 	depth := 0
 	for ; i < len(input); i++ {
 		c := input[i]
-		switch scanner.step(scanner, c) {
+		switch scanner.step(&scanner, c) {
 		case scanBeginObject, scanBeginArray:
 			depth++
 		case scanEndObject:
 			depth--
 		case scanEndArray:
 			if depth == 0 {
-				return i + 1, nil
+				return
 			}
 			depth--
 
@@ -396,12 +366,12 @@ func obfuscateArrayStrings(scanner *scanner, input string, i int, visit func(fro
 			}
 
 		case scanError:
-			return i, scanner.err
+			return
 		}
 	}
-	return i, errUnexpectedEndOfString
 }
 
+// Helper function to walk the object keys and values.
 func walkObject(scanner *scanner, input string, i int, visit func(keyFrom, keyTo, valueFrom, valueTo int)) (int, error) {
 	i, err := stepTo(scanner, input, i, scanBeginObject)
 	if err != nil {
@@ -461,45 +431,7 @@ func walkObject(scanner *scanner, input string, i int, visit func(keyFrom, keyTo
 	return i, errUnexpectedEndOfString
 }
 
-func (o *appsecEventsObfuscator) obfuscateAppSecParameterValue(input string, diff *Diff, diffOffset int, hasSensitiveKey bool) error {
-	var (
-		scanner scanner
-		tmpDiff Diff
-	)
-	scanner.reset()
-	_, err := o.obfuscateAppSecParameterValue_(&scanner, input, 0, &tmpDiff, hasSensitiveKey)
-	if err != nil {
-		return err
-	}
-	tmpDiff.AppendTo(diff, diffOffset)
-	return nil
-}
-
-func (o *appsecEventsObfuscator) obfuscateAppSecParameterValue_(scanner *scanner, input string, i int, diff *Diff, hasSensitiveKey bool) (int, error) {
-	value, from, i, err := scanString(scanner, input, i)
-	if err != nil {
-		return i, err
-	}
-	if hasSensitiveKey {
-		diff.Add(from, i-1, `"?"`)
-		return i, nil
-	}
-	value, err = unquote(value)
-	if err != nil {
-		return i, err
-	}
-	if !matchString(o.valueRE, value) {
-		return i, nil
-	}
-	value = o.valueRE.ReplaceAllString(value, "?")
-	value, err = quote(value)
-	if err != nil {
-		return i, err
-	}
-	diff.Add(from, i-1, value)
-	return i, nil
-}
-
+// Helper function to step to the given expected scanner operation `to`.
 func stepTo(scanner *scanner, input string, i int, to int) (int, error) {
 	for ; i < len(input); i++ {
 		switch op := scanner.step(scanner, input[i]); op {
@@ -516,6 +448,8 @@ func stepTo(scanner *scanner, input string, i int, to int) (int, error) {
 	return i, errUnexpectedEndOfString
 }
 
+// Helper function to step to one of the given expected scanner operations `to`.
+// An error is returned if another operation is found.
 func stepToOneOf(scanner *scanner, input string, i int, to ...int) (j int, op int, err error) {
 	for ; i < len(input); i++ {
 		switch op := scanner.step(scanner, input[i]); op {
@@ -535,6 +469,8 @@ func stepToOneOf(scanner *scanner, input string, i int, to ...int) (j int, op in
 	return i, 0, errUnexpectedEndOfString
 }
 
+// Helper function to keep scanning until the scanner operation `until` is
+// reached.
 func stepUntil(scanner *scanner, input string, i int, until int) (int, error) {
 	for ; i < len(input); i++ {
 		switch op := scanner.step(scanner, input[i]); op {
@@ -549,29 +485,42 @@ func stepUntil(scanner *scanner, input string, i int, until int) (int, error) {
 	return i, errUnexpectedEndOfString
 }
 
-func scanString(scanner *scanner, input string, i int) (value string, from, j int, err error) {
-	i, err = stepTo(scanner, input, i, scanBeginLiteral)
+// Helper function to scan the string value of the given input. It returns the
+// from/to offsets of the input so that the json string is located at
+// `input[from:to]`.
+func scanString(input string) (from, to int, err error) {
+	var scanner scanner
+	scanner.reset()
+	i, err := stepTo(&scanner, input, 0, scanBeginLiteral)
 	if err != nil {
-		return "", 0, i, err
+		return 0, 0, err
 	}
 	from = i - 1
+	// Check this is a string literal by checking if the character starting the
+	// literal is a double-quote
 	if input[from] != '"' {
-		return "", from, i + 1, unexpectedScannerOpError(scanBeginLiteral)
+		return from, i + 1, unexpectedScannerOpError(scanBeginLiteral)
 	}
+	// Scan the input until we find the double-quote the string
 	for ; i < len(input); i++ {
-		switch op := scanner.step(scanner, input[i]); op {
+		switch op := scanner.step(&scanner, input[i]); op {
 		case scanError:
-			return "", from, i + 1, scanner.err
+			return from, i + 1, scanner.err
 		case scanContinue:
+			// Check if the current character is a double-quote ending the
+			// string by checking that it is not escaped by the previous one.
 			if input[i] == '"' && input[i-1] != '\\' {
 				to := i + 1
-				return input[from:to], from, to, nil
+				return from, to, nil
 			}
 		default:
-			return "", from, i + 1, unexpectedScannerOpError(op)
+			return from, i + 1, unexpectedScannerOpError(op)
 		}
 	}
-	return "", from, i, errUnexpectedEndOfString
+	// We reached the end of the input without finding the last string
+	// double-quote and therefore results into a json syntax error.
+	scanner.eof()
+	return 0, 0, scanner.err
 }
 
 // unquote converts a quoted JSON string literal into a Go string.
@@ -588,4 +537,13 @@ func unquote(s string) (t string, err error) {
 func quote(s string) (t string, err error) {
 	buf, err := json.Marshal(s)
 	return string(buf), err
+}
+
+// matchString is a helper function returning false when the regexp is nil and
+// otherwise calling the regular expression to match the string.
+func matchString(re *regexp.Regexp, s string) bool {
+	if re == nil {
+		return false
+	}
+	return re.MatchString(s)
 }
