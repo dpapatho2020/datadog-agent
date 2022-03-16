@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -40,9 +41,15 @@ func main() {
 	if err := filepath.WalkDir(archiveRootPath, twCollector.treeWalkerBuilder(archiveRootPath)); err != nil {
 		panic(err)
 	}
-	fmt.Println(len(twCollector.infos))
+	fmt.Printf("%d kernels\n", len(twCollector.kernels))
+	fmt.Printf("%d unique constants\n", len(twCollector.constants))
 
-	output, err := json.MarshalIndent(twCollector.infos, "", "\t")
+	export := constantfetch.BTFHubConstants{
+		Constants: twCollector.constants,
+		Kernels:   twCollector.kernels,
+	}
+
+	output, err := json.MarshalIndent(export, "", "\t")
 	if err != nil {
 		panic(err)
 	}
@@ -53,17 +60,42 @@ func main() {
 }
 
 type treeWalkCollector struct {
-	infos    []constantfetch.BTFHubConstantsInfo
-	counter  int
-	sampling int
+	constants []map[string]uint64
+	kernels   []constantfetch.BTFHubKernel
+	counter   int
+	sampling  int
 }
 
 func newTreeWalkCollector(sampling int) *treeWalkCollector {
 	return &treeWalkCollector{
-		infos:    make([]constantfetch.BTFHubConstantsInfo, 0),
-		counter:  0,
-		sampling: sampling,
+		constants: make([]map[string]uint64, 0),
+		kernels:   make([]constantfetch.BTFHubKernel, 0),
+		counter:   0,
+		sampling:  sampling,
 	}
+}
+
+func (c *treeWalkCollector) appendConstants(distrib, version, arch, unameRelease string, constants map[string]uint64) {
+	index := -1
+	for i, other := range c.constants {
+		if reflect.DeepEqual(other, constants) {
+			index = i
+			break
+		}
+	}
+
+	if index == -1 {
+		index = len(c.constants)
+		c.constants = append(c.constants, constants)
+	}
+
+	c.kernels = append(c.kernels, constantfetch.BTFHubKernel{
+		Distribution:   distrib,
+		DistribVersion: version,
+		Arch:           arch,
+		UnameRelease:   unameRelease,
+		ConstantsIndex: index,
+	})
 }
 
 func (c *treeWalkCollector) treeWalkerBuilder(prefix string) fs.WalkDirFunc {
@@ -104,15 +136,8 @@ func (c *treeWalkCollector) treeWalkerBuilder(prefix string) fs.WalkDirFunc {
 			return err
 		}
 
-		c.infos = append(c.infos, constantfetch.BTFHubConstantsInfo{
-			Distribution:   distribution,
-			DistribVersion: distribVersion,
-			Arch:           arch,
-			UnameRelease:   unameRelease,
-			Constants:      constants,
-		})
-
-		return err
+		c.appendConstants(distribution, distribVersion, arch, unameRelease, constants)
+		return nil
 	}
 }
 
