@@ -131,14 +131,14 @@ func newKernelInfos(kv *kernel.Version) (*kernelInfos, bool) {
 	}, true
 }
 
-// BTFHubConstantsInfo represents all the information required for identifying
+// BTFHubConstants represents all the information required for identifying
 // a unique btf file from BTFHub
 type BTFHubConstants struct {
 	Constants []map[string]uint64 `json:"constants"`
 	Kernels   []BTFHubKernel      `json:"kernels"`
 }
 
-// BTFHubConstantsInfo represents all the information required for identifying
+// BTFHubKernel represents all the information required for identifying
 // a unique btf file from BTFHub
 type BTFHubKernel struct {
 	Distribution   string `json:"distrib"`
