@@ -14,14 +14,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/DataDog/datadog-agent/pkg/security/metrics"
-
 	"github.com/DataDog/datadog-go/statsd"
 	"github.com/cilium/ebpf"
 	"github.com/pkg/errors"
 
 	"github.com/DataDog/datadog-agent/pkg/security/api"
 	seclog "github.com/DataDog/datadog-agent/pkg/security/log"
+	"github.com/DataDog/datadog-agent/pkg/security/metrics"
 	"github.com/DataDog/datadog-agent/pkg/security/secl/model"
 )
 
@@ -186,8 +185,7 @@ func (adm *ActivityDumpManager) insertActivityDump(newDump *ActivityDump) error 
 		// check if the provided comm is new
 		for _, dump := range adm.activeDumps {
 			if dump.Comm == newDump.Comm {
-				// an activity dump is already active for this comm, ignore
-				return nil
+				return fmt.Errorf("an activity dump is already active for the provided comm")
 			}
 		}
 	}
@@ -244,6 +242,7 @@ func (adm *ActivityDumpManager) HandleCgroupTracingEvent(event *model.CgroupTrac
 		ad.DifferentiateArgs = true
 		ad.WithGraph = true
 		ad.OutputDirectory = adm.outputDirectory
+		ad.OutputFormat = MSGP
 	})
 	if err != nil {
 		seclog.Errorf("couldn't start tracing [%s]: %v", newDump.GetSelectorStr(), err)
@@ -263,12 +262,21 @@ func (adm *ActivityDumpManager) DumpActivity(params *api.DumpActivityParams) (*a
 	adm.Lock()
 	defer adm.Unlock()
 
+	switch OutputFormat(params.GetOutputFormat()) {
+	case JSON, MSGP:
+		break
+	default:
+		errMsg := fmt.Errorf("unknown output format \"%s\", options are \"json\" and \"msgp\"", params.OutputFormat)
+		return &api.SecurityActivityDumpMessage{Error: errMsg.Error()}, errMsg
+	}
+
 	newDump, err := NewActivityDump(adm, func(ad *ActivityDump) {
 		ad.Comm = params.GetComm()
 		ad.Timeout = time.Duration(params.Timeout) * time.Minute
 		ad.DifferentiateArgs = params.GetDifferentiateArgs()
 		ad.WithGraph = params.GetWithGraph()
 		ad.OutputDirectory = params.GetOutputDirectory()
+		ad.OutputFormat = OutputFormat(params.GetOutputFormat())
 	})
 	if err != nil {
 		newDump.Close()

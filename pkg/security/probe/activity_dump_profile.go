@@ -9,11 +9,12 @@
 package probe
 
 import (
-	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"text/template"
+
+	"github.com/tinylib/msgp/msgp"
 )
 
 var profileTmpl = `---
@@ -35,13 +36,9 @@ func GenerateProfile(inputFile string) (string, error) {
 		return "", fmt.Errorf("couldn't open activity dump file: %w", err)
 	}
 
-	data, err := ioutil.ReadAll(f)
-	if err != nil {
-		return "", fmt.Errorf("couldn't read activity dump file: %w", err)
-	}
-
 	var dump ActivityDump
-	err = json.Unmarshal(data, &dump)
+	msgpReader := msgp.NewReader(f)
+	err = dump.DecodeMsg(msgpReader)
 	if err != nil {
 		return "", fmt.Errorf("couldn't parse activity dump file: %w", err)
 	}
