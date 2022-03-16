@@ -848,6 +848,32 @@ func TestWalkObject(t *testing.T) {
 	}
 }
 
+func BenchmarkObfuscator(b *testing.B) {
+	keyRE := regexp.MustCompile(`SENSITIVE_KEY`)
+	valueRE := regexp.MustCompile(`SENSITIVE_VALUE`)
+	input := `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"SENSITIVE_KEY"],"highlight":["highlighted SENSITIVE_VALUE value 1","highlighted SENSITIVE_VALUE value 2","highlighted SENSITIVE_VALUE value 3"],"value":"the entire SENSITIVE_VALUE value"}]}]}]}`
+
+	b.Run("scanner", func(b *testing.B) {
+		o := appsecEventsObfuscator{
+			keyRE:   keyRE,
+			valueRE: valueRE,
+		}
+		b.ReportAllocs()
+		b.ResetTimer()
+		for n := 0; n < b.N; n++ {
+			o.obfuscate(input)
+		}
+	})
+
+	b.Run("unmarshalled", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for n := 0; n < b.N; n++ {
+			obfuscatorWithJSONParsing(keyRE, valueRE, input)
+		}
+	})
+}
+
 func obfuscatorWithJSONParsing(keyRE, valueRE *regexp.Regexp, val string) string {
 	if keyRE == nil && valueRE == nil {
 		return val
