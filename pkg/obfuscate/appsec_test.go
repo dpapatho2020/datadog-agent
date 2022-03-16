@@ -1,7 +1,6 @@
 package obfuscate
 
 import (
-	"encoding/json"
 	"regexp"
 	"testing"
 
@@ -10,236 +9,229 @@ import (
 )
 
 func TestObfuscateAppSec(t *testing.T) {
-	for _, tc := range []struct {
-		name           string
-		keyRE, valueRE *regexp.Regexp
-		value          string
-		expected       string
+	i := []struct {
+		name                string
+		input               string
+		expectedOutput      string
+		expectedSyntaxError bool
 	}{
 		{
+			name:           "object-empty",
+			input:          `{}`,
+			expectedOutput: `{}`,
+		},
+		{
+			name:           "object-no-parameters",
+			input:          `{ " key 1 " : " value 1 " }`,
+			expectedOutput: `{ " key 1 " : " value 1 " }`,
+		},
+		{
+			name:           "object-parameters-last",
+			input:          `{ " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" } ] }`,
+			expectedOutput: `{ " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a ? value with many ?" } ] }`,
+		},
+		{
+			name:           "object-parameters-alone",
+			input:          `{ "parameters" : [ { "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" } ] }`,
+			expectedOutput: `{ "parameters" : [ { "value": "i am a ? value with many ?" } ] }`,
+		},
+		{
+			name:           "object-parameters-first",
+			input:          `{ "parameters" : [ { "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" } ] , " key 1 " : " value 1 " }`,
+			expectedOutput: `{ "parameters" : [ { "value": "i am a ? value with many ?" } ] , " key 1 " : " value 1 " }`,
+		},
+		{
+			name:           "object-parameters-middle",
+			input:          `{ " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" } ] , " key 2 " : " value 2 " }`,
+			expectedOutput: `{ " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a ? value with many ?" } ] , " key 2 " : " value 2 " }`,
+		},
+		{
+			name:           "object-many-parameters",
+			input:          `{ " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" }, { "value": " i am the second SENSITIVE_VALUE ! " }, { "value": " i am the third value ! " }, { "value": " i am the forth SENSITIVE_VALUE ! " } ] , " key 2 " : " value 2 " }`,
+			expectedOutput: `{ " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a ? value with many ?" }, { "value": " i am the second ? ! " }, { "value": " i am the third value ! " }, { "value": " i am the forth ? ! " } ] , " key 2 " : " value 2 " }`,
+		},
+		{
+			name:           "object-nested",
+			input:          `{ "triggers" : [ { "rule_matches" : [ { " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" }, { "value": " i am the second SENSITIVE_VALUE ! " }, { "value": " i am the third value ! " }, { "value": " i am the forth SENSITIVE_VALUE ! " } ] , " key 2 " : " value 2 " } ] } ] }`,
+			expectedOutput: `{ "triggers" : [ { "rule_matches" : [ { " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a ? value with many ?" }, { "value": " i am the second ? ! " }, { "value": " i am the third value ! " }, { "value": " i am the forth ? ! " } ] , " key 2 " : " value 2 " } ] } ] }`,
+		},
+		{
+			name:                "syntax-error-unexpected-end-of-json",
+			input:               `{ "triggers" : [ { "rule_matches" : [ { " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" }, { "value": " i am the second SENSITIVE_VALUE ! " }, { "value": " i am the third value ! " }, { "value": " i am the forth SENSITIVE_VALUE ! " } ] , " key 2 " : " value 2 " } ] } ]`,
+			expectedOutput:      `{ "triggers" : [ { "rule_matches" : [ { " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" }, { "value": " i am the second SENSITIVE_VALUE ! " }, { "value": " i am the third value ! " }, { "value": " i am the forth SENSITIVE_VALUE ! " } ] , " key 2 " : " value 2 " } ] } ]`,
+			expectedSyntaxError: true,
+		},
+		{
+			name:                "syntax-error-unexpected-string-escape",
+			input:               `{ "triggers\ " : [ { "rule_matches" : [ { " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" }, { "value": " i am the second SENSITIVE_VALUE ! " }, { "value": " i am the third value ! " }, { "value": " i am the forth SENSITIVE_VALUE ! " } ] , " key 2 " : " value 2 " } ] } ] }`,
+			expectedOutput:      `{ "triggers\ " : [ { "rule_matches" : [ { " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" }, { "value": " i am the second SENSITIVE_VALUE ! " }, { "value": " i am the third value ! " }, { "value": " i am the forth SENSITIVE_VALUE ! " } ] , " key 2 " : " value 2 " } ] } ] }`,
+			expectedSyntaxError: true,
+		},
+		{
+			name:                "syntax-error",
+			input:               `{ "triggers : [ { "rule_matches" : [ { " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" }, { "value": " i am the second SENSITIVE_VALUE ! " }, { "value": " i am the third value ! " }, { "value": " i am the forth SENSITIVE_VALUE ! " } ] , " key 2 " : " value 2 " } ] } ] }`,
+			expectedOutput:      `{ "triggers : [ { "rule_matches" : [ { " key 1 " : " value 1 " , "parameters" : [ { "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" }, { "value": " i am the second SENSITIVE_VALUE ! " }, { "value": " i am the third value ! " }, { "value": " i am the forth SENSITIVE_VALUE ! " } ] , " key 2 " : " value 2 " } ] } ] }`,
+			expectedSyntaxError: true,
+		},
+
+		{
 			// The key regexp should take precedence over the value regexp and obfuscate the entire values
-			name:     "sensitive-key",
-			keyRE:    regexp.MustCompile(`k3`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"k3"],"highlight":["highlighted SENSITIVE value 1","highlighted SENSITIVE value 2","highlighted SENSITIVE value 3"],"value":"the entire SENSITIVE value"}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"k3"],"highlight":["?","?","?"],"value":"?"}]}]}]}`,
+			name:           "sensitive-key",
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"SENSITIVE_KEY"],"highlight":["highlighted SENSITIVE_VALUE value 1","highlighted SENSITIVE_VALUE value 2","highlighted SENSITIVE_VALUE value 3"],"value":"the entire SENSITIVE_VALUE value"}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"SENSITIVE_KEY"],"highlight":["?","?","?"],"value":"?"}]}]}]}`,
 		},
 		{
 			// The key regexp should take precedence over the value regexp and obfuscate the entire values
-			name:     "sensitive-key",
-			keyRE:    regexp.MustCompile(`k3`),
-			valueRE:  nil,
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"k3"],"highlight":["highlighted SENSITIVE value 1","highlighted SENSITIVE value 2","highlighted SENSITIVE value 3"],"value":"the entire SENSITIVE value"}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"k3"],"highlight":["?","?","?"],"value":"?"}]}]}]}`,
+			name:           "sensitive-key",
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"k3"],"highlight":["highlighted SENSITIVE_VALUE value 1","highlighted SENSITIVE_VALUE value 2","highlighted SENSITIVE_VALUE value 3"],"value":"the entire SENSITIVE_VALUE value"}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"k3"],"highlight":["?","?","?"],"value":"?"}]}]}]}`,
 		},
 		{
 			// The key regexp doesn't match and the value regexp does and obfuscates accordingly.
-			name:     "sensitive-value",
-			keyRE:    nil,
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"k3"],"highlight":["highlighted SENSITIVE value 1","highlighted value 2","highlighted SENSITIVE value 3"],"value":"the entire SENSITIVE value"}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"k3"],"highlight":["highlighted ? value 1","highlighted value 2","highlighted ? value 3"],"value":"the entire ? value"}]}]}]}`,
+			name:           "sensitive-value",
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"k3"],"highlight":["highlighted SENSITIVE_VALUE value 1","highlighted value 2","highlighted SENSITIVE_VALUE value 3"],"value":"the entire SENSITIVE_VALUE value"}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"k3"],"highlight":["highlighted ? value 1","highlighted value 2","highlighted ? value 3"],"value":"the entire ? value"}]}]}]}`,
 		},
 		{
-			name:     "disabled",
-			keyRE:    nil,
-			valueRE:  nil,
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"k3"],"highlight":["highlighted SENSITIVE value 1","highlighted value 2","highlighted SENSITIVE value 3"],"value":"the entire SENSITIVE value"}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,"k1",2,"k3"],"highlight":["highlighted SENSITIVE value 1","highlighted value 2","highlighted SENSITIVE value 3"],"value":"the entire SENSITIVE value"}]}]}]}`,
+			name:           "unexpected-json-empty-value",
+			input:          ``,
+			expectedOutput: ``,
 		},
 		{
-			name:     "unexpected-json-empty-value",
-			keyRE:    regexp.MustCompile(`SENSITIVE`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    ``,
-			expected: ``,
+			name:           "unexpected-json-null-value",
+			input:          `null`,
+			expectedOutput: `null`,
 		},
 		{
-			name:     "unexpected-json-null-value",
-			keyRE:    regexp.MustCompile(`SENSITIVE`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `null`,
-			expected: `null`,
+			name:           "unexpected-json-value",
+			input:          `""`,
+			expectedOutput: `""`,
 		},
 		{
-			name:     "unexpected-json-value",
-			keyRE:    regexp.MustCompile(`SENSITIVE`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `""`,
-			expected: `""`,
+			name:           "unexpected-json-value",
+			input:          `{}`,
+			expectedOutput: `{}`,
 		},
 		{
-			name:     "unexpected-json-value",
-			keyRE:    regexp.MustCompile(`SENSITIVE`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{}`,
-			expected: `{}`,
+			name:           "unexpected-json-value",
+			input:          `{"triggers":"not an array"}`,
+			expectedOutput: `{"triggers":"not an array"}`,
 		},
 		{
-			name:     "unexpected-json-value",
-			keyRE:    regexp.MustCompile(`SENSITIVE`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":"not an array"}`,
-			expected: `{"triggers":"not an array"}`,
+			name:           "unexpected-json-value",
+			input:          `{"triggers":["not a struct"]}`,
+			expectedOutput: `{"triggers":["not a struct"]}`,
 		},
 		{
-			name:     "unexpected-json-value",
-			keyRE:    regexp.MustCompile(`SENSITIVE`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":["not a struct"]}`,
-			expected: `{"triggers":["not a struct"]}`,
-		},
-		{
-			name:     "unexpected-json-value",
-			keyRE:    regexp.MustCompile(`SENSITIVE`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches": "not an array"}]}`,
-			expected: `{"triggers":[{"rule_matches": "not an array"}]}`,
+			name:           "unexpected-json-value",
+			input:          `{"triggers":[{"rule_matches": "not an array"}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches": "not an array"}]}`,
 		}, {
 
-			name:     "unexpected-json-value",
-			keyRE:    regexp.MustCompile(`SENSITIVE`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches": ["not a struct"]}]}`,
-			expected: `{"triggers":[{"rule_matches": ["not a struct"]}]}`,
+			name:           "unexpected-json-value",
+			input:          `{"triggers":[{"rule_matches": ["not a struct"]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches": ["not a struct"]}]}`,
 		},
 		{
-			name:     "unexpected-json-value",
-			keyRE:    regexp.MustCompile(`SENSITIVE`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches": [{"parameters":{}}]}]}`,
-			expected: `{"triggers":[{"rule_matches": [{"parameters":{}}]}]}`,
+			name:           "unexpected-json-value",
+			input:          `{"triggers":[{"rule_matches": [{"parameters":{}}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches": [{"parameters":{}}]}]}`,
 		},
 		{
-			name:     "unexpected-json-value",
-			keyRE:    regexp.MustCompile(`SENSITIVE`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches": [{"parameters":"not an array"}]}]}`,
-			expected: `{"triggers":[{"rule_matches": [{"parameters":"not an array"}]}]}`,
+			name:           "unexpected-json-value",
+			input:          `{"triggers":[{"rule_matches": [{"parameters":"not an array"}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches": [{"parameters":"not an array"}]}]}`,
 		},
 		{
-			name:     "unexpected-json-value",
-			keyRE:    regexp.MustCompile(`SENSITIVE`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches": [{"parameters":["not a struct"]}]}]}`,
-			expected: `{"triggers":[{"rule_matches": [{"parameters":["not a struct"]}]}]}`,
+			name:           "unexpected-json-value",
+			input:          `{"triggers":[{"rule_matches": [{"parameters":["not a struct"]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches": [{"parameters":["not a struct"]}]}]}`,
 		},
 		// The obfuscator should be permissive enough to still obfuscate the values with a bad key_path
 		{
-			name:     "unexpected-json-value-key-path-missing",
-			keyRE:    regexp.MustCompile(`k3`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"highlight":["highlighted SENSITIVE value 1","highlighted SENSITIVE value 2","highlighted SENSITIVE value 3"],"value":"the entire SENSITIVE value"}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"],"value":"the entire ? value"}]}]}]}`,
+			name:           "unexpected-json-value-key-path-missing",
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"highlight":["highlighted SENSITIVE_VALUE value 1","highlighted SENSITIVE_VALUE value 2","highlighted SENSITIVE_VALUE value 3"],"value":"the entire SENSITIVE_VALUE value"}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"],"value":"the entire ? value"}]}]}]}`,
 		},
 		{
-			name:     "unexpected-json-value-key-path-bad-type",
-			keyRE:    regexp.MustCompile(`k3`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":"bad type","highlight":["highlighted SENSITIVE value 1","highlighted SENSITIVE value 2","highlighted SENSITIVE value 3"],"value":"the entire SENSITIVE value"}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":"bad type","highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"],"value":"the entire ? value"}]}]}]}`,
+			name:           "unexpected-json-value-key-path-bad-type",
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":"bad type","highlight":["highlighted SENSITIVE_VALUE value 1","highlighted SENSITIVE_VALUE value 2","highlighted SENSITIVE_VALUE value 3"],"value":"the entire SENSITIVE_VALUE value"}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":"bad type","highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"],"value":"the entire ? value"}]}]}]}`,
 		},
 		{
-			name:     "unexpected-json-value-key-path-null-array",
-			keyRE:    regexp.MustCompile(`k3`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":null,"highlight":["highlighted SENSITIVE value 1","highlighted SENSITIVE value 2","highlighted SENSITIVE value 3"],"value":"the entire SENSITIVE value"}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":null,"highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"],"value":"the entire ? value"}]}]}]}`,
+			name:           "unexpected-json-value-key-path-null-array",
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":null,"highlight":["highlighted SENSITIVE_VALUE value 1","highlighted SENSITIVE_VALUE value 2","highlighted SENSITIVE_VALUE value 3"],"value":"the entire SENSITIVE_VALUE value"}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":null,"highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"],"value":"the entire ? value"}]}]}]}`,
 		},
 		{
-			name:     "unexpected-json-value-key-path-empty-array",
-			keyRE:    regexp.MustCompile(`k3`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[],"highlight":["highlighted SENSITIVE value 1","highlighted SENSITIVE value 2","highlighted SENSITIVE value 3"],"value":"the entire SENSITIVE value"}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[],"highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"],"value":"the entire ? value"}]}]}]}`,
+			name:           "unexpected-json-value-key-path-empty-array",
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[],"highlight":["highlighted SENSITIVE_VALUE value 1","highlighted SENSITIVE_VALUE value 2","highlighted SENSITIVE_VALUE value 3"],"value":"the entire SENSITIVE_VALUE value"}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[],"highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"],"value":"the entire ? value"}]}]}]}`,
 		},
 		// The obfuscator should be permissive enough to still obfuscate the values in case of bad parameter value
 		{
-			name:     "unexpected-json-value-parameter-highlight-missing",
-			keyRE:    regexp.MustCompile(`k3`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"value":"the entire SENSITIVE value"}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"value":"the entire ? value"}]}]}]}`,
+			name:           "unexpected-json-value-parameter-highlight-missing",
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"value":"the entire SENSITIVE_VALUE value"}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"value":"the entire ? value"}]}]}]}`,
 		},
 		{
-			name:     "unexpected-json-value-parameter-highlight-bad-type",
-			keyRE:    regexp.MustCompile(`k3`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":"bad type","value":"the entire SENSITIVE value"}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":"bad type","value":"the entire ? value"}]}]}]}`,
+			name:           "unexpected-json-value-parameter-highlight-bad-type",
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":"bad type","value":"the entire SENSITIVE_VALUE value"}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":"bad type","value":"the entire ? value"}]}]}]}`,
 		},
 		{
-			name:     "unexpected-json-value-parameter-highlight-null-array",
-			keyRE:    regexp.MustCompile(`k3`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":null,"value":"the entire SENSITIVE value"}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":null,"value":"the entire ? value"}]}]}]}`,
+			name:           "unexpected-json-value-parameter-highlight-null-array",
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":null,"value":"the entire SENSITIVE_VALUE value"}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":null,"value":"the entire ? value"}]}]}]}`,
 		},
 		{
-			name:     "unexpected-json-value-parameter-highlight-empty-array",
-			keyRE:    regexp.MustCompile(`k3`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":[],"value":"the entire SENSITIVE value"}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":[],"value":"the entire ? value"}]}]}]}`,
+			name:           "unexpected-json-value-parameter-highlight-empty-array",
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":[],"value":"the entire SENSITIVE_VALUE value"}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":[],"value":"the entire ? value"}]}]}]}`,
 		},
 		{
-			name:     "unexpected-json-value-parameter-highlight-empty-array",
-			keyRE:    regexp.MustCompile(`k3`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":[1,"the highlighted SENSITIVE value",[1,2,3]],"value":"the entire SENSITIVE value"}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":[1,"the highlighted ? value",[1,2,3]],"value":"the entire ? value"}]}]}]}`,
+			name:           "unexpected-json-value-parameter-highlight-empty-array",
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":[1,"the highlighted SENSITIVE_VALUE value",[1,2,3]],"value":"the entire SENSITIVE_VALUE value"}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":[1,"the highlighted ? value",[1,2,3]],"value":"the entire ? value"}]}]}]}`,
 		},
 		// The obfuscator should be permissive enough to still obfuscate the values with a bad parameter value
 		{
-			name:     "unexpected-json-value-parameter-value-missing",
-			keyRE:    regexp.MustCompile(`k3`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted SENSITIVE value 1","highlighted SENSITIVE value 2","highlighted SENSITIVE value 3"]}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"]}]}]}]}`,
+			name:           "unexpected-json-value-parameter-value-missing",
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted SENSITIVE_VALUE value 1","highlighted SENSITIVE_VALUE value 2","highlighted SENSITIVE_VALUE value 3"]}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"]}]}]}]}`,
 		},
 		{
-			name:     "unexpected-json-value-parameter-value-bad-type",
-			keyRE:    regexp.MustCompile(`k3`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted SENSITIVE value 1","highlighted SENSITIVE value 2","highlighted SENSITIVE value 3"],"value":33}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"],"value":33}]}]}]}`,
+			name:           "unexpected-json-value-parameter-value-bad-type",
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted SENSITIVE_VALUE value 1","highlighted SENSITIVE_VALUE value 2","highlighted SENSITIVE_VALUE value 3"],"value":33}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"],"value":33}]}]}]}`,
 		},
 		{
-			name:     "unexpected-json-value-parameter-value-null",
-			keyRE:    regexp.MustCompile(`k3`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted SENSITIVE value 1","highlighted SENSITIVE value 2","highlighted SENSITIVE value 3"],"value":null}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"],"value":null}]}]}]}`,
+			name:           "unexpected-json-value-parameter-value-null",
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted SENSITIVE_VALUE value 1","highlighted SENSITIVE_VALUE value 2","highlighted SENSITIVE_VALUE value 3"],"value":null}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"],"value":null}]}]}]}`,
 		},
 		{
-			name:     "unexpected-json-value-parameter-value-empty-string",
-			keyRE:    regexp.MustCompile(`k3`),
-			valueRE:  regexp.MustCompile(`SENSITIVE`),
-			value:    `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted SENSITIVE value 1","highlighted SENSITIVE value 2","highlighted SENSITIVE value 3"],"value":""}]}]}]}`,
-			expected: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"],"value":""}]}]}]}`,
+			name:           "unexpected-json-value-parameter-value-empty-string",
+			input:          `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted SENSITIVE_VALUE value 1","highlighted SENSITIVE_VALUE value 2","highlighted SENSITIVE_VALUE value 3"],"value":""}]}]}]}`,
+			expectedOutput: `{"triggers":[{"rule_matches":[{"parameters":[{"key_path":[0,1,2,"3"],"highlight":["highlighted ? value 1","highlighted ? value 2","highlighted ? value 3"],"value":""}]}]}]}`,
 		},
-	} {
-		tc := tc
+	}
+	for _, tc := range i {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := Config{
-				AppSec: AppSecConfig{
-					ParameterKeyRegexp:   tc.keyRE,
-					ParameterValueRegexp: tc.valueRE,
-				},
+			o := appsecEventsObfuscator{
+				keyRE:   regexp.MustCompile("SENSITIVE_KEY"),
+				valueRE: regexp.MustCompile("SENSITIVE_VALUE"),
 			}
-			result := NewObfuscator(cfg).ObfuscateAppSec(tc.value)
-			if tc.value == "" {
-				require.Equal(t, result, tc.expected)
-			} else {
-				// Compare the two parsed json values
-				var actual interface{}
-				err := json.Unmarshal([]byte(result), &actual)
-				require.NoError(t, err)
-				var expected interface{}
-				err = json.Unmarshal([]byte(tc.expected), &expected)
-				require.NoError(t, err)
-				require.Equal(t, expected, actual)
+			output, err := o.obfuscateAppSec(tc.input)
+			if err != nil {
+				if tc.expectedSyntaxError {
+					_, ok := err.(*SyntaxError)
+					require.True(t, ok)
+				} else {
+					require.NoError(t, err)
+				}
 			}
+			require.Equal(t, tc.expectedOutput, output)
 		})
 	}
 }
@@ -248,9 +240,9 @@ func TestObfuscateAppSecParameter(t *testing.T) {
 	i := []struct {
 		name                          string
 		input                         string
-		expectedSyntaxError           bool
-		expectedUnexpectedTypeError   bool
 		expectedOutput                string
+		expectedSyntaxError           bool
+		unexpectedScannerOpError      int
 		expectedUnexpectedEndOfString bool
 	}{
 		{
@@ -314,6 +306,21 @@ func TestObfuscateAppSecParameter(t *testing.T) {
 			expectedOutput: `{ "highlight": [ "?", "?", "?" ], "key 1": "SENSITIVE_VALUE", "key_path": ["SENSITIVE_KEY"], "key 2": [ "SENSITIVE_VALUE" ], "value": "?", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null }`,
 		},
 		{
+			name:           "object-mixed-no-spaces",
+			input:          `{"highlight":["i am a SENSITIVE_VALUE value","i am not a a sensitive value","i am another SENSITIVE_VALUE value"],"key 1":"SENSITIVE_VALUE","key_path":["SENSITIVE_KEY"],"key 2":["SENSITIVE_VALUE"],"value":"i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE","key 3":{"SENSITIVE_KEY":"SENSITIVE_VALUE"},"SENSITIVE_KEY":null}`,
+			expectedOutput: `{"highlight":["?","?","?"],"key 1":"SENSITIVE_VALUE","key_path":["SENSITIVE_KEY"],"key 2":["SENSITIVE_VALUE"],"value":"?","key 3":{"SENSITIVE_KEY":"SENSITIVE_VALUE"},"SENSITIVE_KEY":null}`,
+		},
+		{
+			name:           "object-mixed-properties-sensitive-key-with-bad-value-types",
+			input:          `{ "highlight": "bad type - i am a SENSITIVE_VALUE value", "key 1": "SENSITIVE_VALUE", "key 2": [ "SENSITIVE_VALUE" ], "value": [ "bad type - i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" ], "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": ["SENSITIVE_VALUE"], "key_path": ["SENSITIVE_KEY"] }`,
+			expectedOutput: `{ "highlight": "bad type - i am a SENSITIVE_VALUE value", "key 1": "SENSITIVE_VALUE", "key 2": [ "SENSITIVE_VALUE" ], "value": [ "bad type - i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE" ], "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": ["SENSITIVE_VALUE"], "key_path": ["SENSITIVE_KEY"] }`,
+		},
+		{
+			name:           "object-mixed-properties-sensitive-key-having-bad-type",
+			input:          `{ "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ], "key 1": "SENSITIVE_VALUE", "key 2": [ "SENSITIVE_VALUE" ], "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null, "key_path": "bad type - SENSITIVE_KEY" }`,
+			expectedOutput: `{ "highlight": [ "i am a ? value", "i am not a a sensitive value", "i am another ? value" ], "key 1": "SENSITIVE_VALUE", "key 2": [ "SENSITIVE_VALUE" ], "value": "i am a ? value with many ?", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null, "key_path": "bad type - SENSITIVE_KEY" }`,
+		},
+		{
 			name:                          "unterminated-json",
 			input:                         `{ "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ], "key 1": "SENSITIVE_VALUE", "key_path": ["SENSITIVE_KEY"], "key 2": [ "SENSITIVE_VALUE" ], "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null`,
 			expectedOutput:                `{ "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ], "key 1": "SENSITIVE_VALUE", "key_path": ["SENSITIVE_KEY"], "key 2": [ "SENSITIVE_VALUE" ], "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null`,
@@ -340,8 +347,8 @@ func TestObfuscateAppSecParameter(t *testing.T) {
 			if err != nil {
 				if tc.expectedSyntaxError {
 					require.Equal(t, scanner.err, err)
-				} else if tc.expectedUnexpectedTypeError {
-					require.Equal(t, errUnexpectedType, err)
+				} else if tc.unexpectedScannerOpError != 0 {
+					require.Equal(t, tc.unexpectedScannerOpError, err)
 				} else if tc.expectedUnexpectedEndOfString {
 					require.Equal(t, errUnexpectedEndOfString, err)
 				} else {
@@ -362,7 +369,7 @@ func TestObfuscateAppSecParameterValue(t *testing.T) {
 		name                          string
 		input                         string
 		expectedSyntaxError           bool
-		expectedUnexpectedTypeError   bool
+		unexpectedScannerOpError      bool
 		expectOutput                  string
 		expectedUnexpectedEndOfString bool
 	}{
@@ -398,34 +405,34 @@ func TestObfuscateAppSecParameterValue(t *testing.T) {
 			expectedUnexpectedEndOfString: true,
 		},
 		{
-			name:                        "empty-string",
-			input:                       ``,
-			expectOutput:                ``,
-			expectedUnexpectedTypeError: true,
+			name:                     "empty-string",
+			input:                    ``,
+			expectOutput:             ``,
+			unexpectedScannerOpError: true,
 		},
 		{
-			name:                        "null",
-			input:                       `null`,
-			expectOutput:                `null`,
-			expectedUnexpectedTypeError: true,
+			name:                     "null",
+			input:                    `null`,
+			expectOutput:             `null`,
+			unexpectedScannerOpError: true,
 		},
 		{
-			name:                        "object",
-			input:                       `{"k":"v"}`,
-			expectOutput:                `{"k":"v"}`,
-			expectedUnexpectedTypeError: true,
+			name:                     "object",
+			input:                    `{"k":"v"}`,
+			expectOutput:             `{"k":"v"}`,
+			unexpectedScannerOpError: true,
 		},
 		{
-			name:                        "array",
-			input:                       `[1,2,"three"]`,
-			expectOutput:                `[1,2,"three"]`,
-			expectedUnexpectedTypeError: true,
+			name:                     "array",
+			input:                    `[1,2,"three"]`,
+			expectOutput:             `[1,2,"three"]`,
+			unexpectedScannerOpError: true,
 		},
 		{
-			name:                        "float",
-			input:                       `1.5`,
-			expectOutput:                `1.5`,
-			expectedUnexpectedTypeError: true,
+			name:                     "float",
+			input:                    `1.5`,
+			expectOutput:             `1.5`,
+			unexpectedScannerOpError: true,
 		},
 		{
 			name:                "syntax-error",
@@ -456,8 +463,8 @@ func TestObfuscateAppSecParameterValue(t *testing.T) {
 					if err != nil {
 						if tc.expectedSyntaxError {
 							require.Equal(t, scanner.err, err)
-						} else if tc.expectedUnexpectedTypeError {
-							require.Equal(t, errUnexpectedType, err)
+						} else if tc.unexpectedScannerOpError {
+							require.Equal(t, tc.unexpectedScannerOpError, err)
 						} else if tc.expectedUnexpectedEndOfString {
 							require.Equal(t, errUnexpectedEndOfString, err)
 						} else {
@@ -484,7 +491,7 @@ func TestObfuscateAppSecParameterHighlight(t *testing.T) {
 		name                           string
 		input                          string
 		expectedSyntaxError            bool
-		expectedUnexpectedTypeError    bool
+		unexpectedScannerOpError       bool
 		expectedOutput                 string
 		expectedOutputWithSensitiveKey string
 		expectedUnexpectedEndOfString  bool
@@ -532,28 +539,28 @@ func TestObfuscateAppSecParameterHighlight(t *testing.T) {
 			expectedUnexpectedEndOfString: true,
 		},
 		{
-			name:                        "empty-string",
-			input:                       ``,
-			expectedOutput:              ``,
-			expectedUnexpectedTypeError: true,
+			name:                     "empty-string",
+			input:                    ``,
+			expectedOutput:           ``,
+			unexpectedScannerOpError: true,
 		},
 		{
-			name:                        "null",
-			input:                       `null`,
-			expectedOutput:              `null`,
-			expectedUnexpectedTypeError: true,
+			name:                     "null",
+			input:                    `null`,
+			expectedOutput:           `null`,
+			unexpectedScannerOpError: true,
 		},
 		{
-			name:                        "object",
-			input:                       `{}`,
-			expectedOutput:              `{}`,
-			expectedUnexpectedTypeError: true,
+			name:                     "object",
+			input:                    `{}`,
+			expectedOutput:           `{}`,
+			unexpectedScannerOpError: true,
 		},
 		{
-			name:                        "float",
-			input:                       `1.5`,
-			expectedOutput:              `1.5`,
-			expectedUnexpectedTypeError: true,
+			name:                     "float",
+			input:                    `1.5`,
+			expectedOutput:           `1.5`,
+			unexpectedScannerOpError: true,
 		},
 		{
 			name:                "syntax-error",
@@ -584,8 +591,8 @@ func TestObfuscateAppSecParameterHighlight(t *testing.T) {
 					if err != nil {
 						if tc.expectedSyntaxError {
 							require.Equal(t, scanner.err, err)
-						} else if tc.expectedUnexpectedTypeError {
-							require.Equal(t, errUnexpectedType, err)
+						} else if tc.unexpectedScannerOpError {
+							require.Equal(t, tc.unexpectedScannerOpError, err)
 						} else if tc.expectedUnexpectedEndOfString {
 							require.Equal(t, errUnexpectedEndOfString, err)
 						} else {
@@ -609,11 +616,11 @@ func TestObfuscateAppSecParameterHighlight(t *testing.T) {
 
 func TestObfuscateAppSecParameterKeyPath(t *testing.T) {
 	for _, tc := range []struct {
-		name                        string
-		input                       string
-		expectedSyntaxError         bool
-		expectedUnexpectedTypeError bool
-		expectedSensitiveKey        bool
+		name                     string
+		input                    string
+		expectedSyntaxError      bool
+		unexpectedScannerOpError bool
+		expectedSensitiveKey     bool
 	}{
 		{
 			name:                 "flat",
@@ -696,19 +703,19 @@ func TestObfuscateAppSecParameterKeyPath(t *testing.T) {
 			expectedSyntaxError: true,
 		},
 		{
-			name:                        "null",
-			input:                       `null`,
-			expectedUnexpectedTypeError: true,
+			name:                     "null",
+			input:                    `null`,
+			unexpectedScannerOpError: true,
 		},
 		{
-			name:                        "object",
-			input:                       `{}`,
-			expectedUnexpectedTypeError: true,
+			name:                     "object",
+			input:                    `{}`,
+			unexpectedScannerOpError: true,
 		},
 		{
-			name:                        "unterminated",
-			input:                       `[ "SENSITIVE_KEY"`,
-			expectedUnexpectedTypeError: true,
+			name:                     "unterminated",
+			input:                    `[ "SENSITIVE_KEY"`,
+			unexpectedScannerOpError: true,
 		},
 		{
 			name:                "syntax-error",
@@ -726,8 +733,8 @@ func TestObfuscateAppSecParameterKeyPath(t *testing.T) {
 			hasSensitiveKey, i, err := o.obfuscateAppSecParameterKeyPath_(scanner, tc.input, 0)
 			if tc.expectedSyntaxError {
 				require.Equal(t, scanner.err, err)
-			} else if tc.expectedUnexpectedTypeError {
-				require.Equal(t, errUnexpectedType, err)
+			} else if tc.unexpectedScannerOpError {
+				require.Equal(t, tc.unexpectedScannerOpError, err)
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, len(tc.input), i)
@@ -743,7 +750,7 @@ func TestWalkObject(t *testing.T) {
 		input                              string
 		expectedSeen                       map[string]string
 		expectedSyntaxError                bool
-		expectedUnexpectedTypeError        bool
+		unexpectedScannerOpError           bool
 		expectedUnexpectedEndOfStringError bool
 	}{
 		{
@@ -797,29 +804,29 @@ func TestWalkObject(t *testing.T) {
 			expectedSeen: map[string]string{`"key"`: `      {      "nested key "  : "nested  value   "   }      `},
 		},
 		{
-			name:                        "null",
-			input:                       "null",
-			expectedUnexpectedTypeError: true,
+			name:                     "null",
+			input:                    "null",
+			unexpectedScannerOpError: true,
 		},
 		{
-			name:                        "array",
-			input:                       `[{"k":"v"}]`,
-			expectedUnexpectedTypeError: true,
+			name:                     "array",
+			input:                    `[{"k":"v"}]`,
+			unexpectedScannerOpError: true,
 		},
 		{
-			name:                        "number",
-			input:                       `1`,
-			expectedUnexpectedTypeError: true,
+			name:                     "number",
+			input:                    `1`,
+			unexpectedScannerOpError: true,
 		},
 		{
-			name:                        "float",
-			input:                       `1.234`,
-			expectedUnexpectedTypeError: true,
+			name:                     "float",
+			input:                    `1.234`,
+			unexpectedScannerOpError: true,
 		},
 		{
-			name:                        "string",
-			input:                       `"1234"`,
-			expectedUnexpectedTypeError: true,
+			name:                     "string",
+			input:                    `"1234"`,
+			unexpectedScannerOpError: true,
 		},
 		{
 			name:                               "unterminated-json",
@@ -864,8 +871,8 @@ func TestWalkObject(t *testing.T) {
 			})
 			if tc.expectedSyntaxError {
 				require.Equal(t, scanner.err, err)
-			} else if tc.expectedUnexpectedTypeError {
-				require.Equal(t, errUnexpectedType, err)
+			} else if tc.unexpectedScannerOpError {
+				require.Equal(t, tc.unexpectedScannerOpError, err)
 			} else if tc.expectedUnexpectedEndOfStringError {
 				require.Equal(t, errUnexpectedEndOfString, err)
 			} else {

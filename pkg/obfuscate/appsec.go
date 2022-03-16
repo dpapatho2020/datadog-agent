@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -141,200 +140,81 @@ type appsecEventsObfuscator struct {
 }
 
 var (
-	errUnexpectedType        = errors.New("unexpected appsec event type")
 	errUnexpectedEndOfString = errors.New("unexpected end of appsec event string")
 )
 
-func (o *appsecEventsObfuscator) obfuscateKeyPath(scanner *scanner, input string, i *int, output strings.Builder, keyRE *regexp.Regexp) (sensitiveKey bool, err error) {
-	if scanner.step(scanner, input[*i]) != scanBeginArray {
-		return false, errUnexpectedType
-	}
-	*i++
-	depth := 0
-	literalFrom := 0
-loop:
-	for {
-		c := input[*i]
-		op := scanner.step(scanner, c)
-		switch op {
-		case scanBeginObject, scanBeginArray:
-			depth++
+type unexpectedScannerOpError int
 
-		case scanEndObject:
-			depth--
+func (err unexpectedScannerOpError) Error() string {
+	return fmt.Sprintf("unexpected json scanner operation %d", err)
+}
 
-		case scanEndArray:
-			depth--
-			if depth == 0 {
-				break loop
-			}
-
-		case scanBeginLiteral, scanContinue:
-			if depth == 0 && literalFrom == -1 {
-				literalFrom = *i
-			}
-
-		case scanArrayValue:
-			value, err := strconv.Unquote(input[literalFrom:*i])
-			if err != nil {
-				continue
-			}
-			if matchString(keyRE, value) {
-				sensitiveKey = true
-				break
-			}
-
+func (o *appsecEventsObfuscator) obfuscateAppSec(input string) (output string, err error) {
+	var (
+		scanner scanner
+		diff    Diff
+	)
+	scanner.reset()
+	keyFrom := -1
+	keyTo := -1
+	for i := 0; i < len(input); i++ {
+		switch scanner.step(&scanner, input[i]) {
 		case scanError:
-			return false, scanner.err
+			return input, scanner.err
+
+		case scanBeginLiteral:
+			if input[i] == '"' {
+				keyFrom = i
+			}
+		case scanContinue:
+			if keyFrom != -1 && input[i] == '"' && input[i-1] != '\\' {
+				keyTo = i
+			}
+		case scanObjectKey:
+			if input[keyFrom:keyTo+1] == `"parameters"` {
+				i, _ = o.obfuscateAppSecParameters(&scanner, input, i+1, &diff)
+				i--
+			}
+			keyFrom = -1
+			keyTo = -1
 		}
-		*i++
 	}
-	return sensitiveKey, nil
+	if scanner.eof() == scanError {
+		return input, scanner.err
+	}
+	return diff.Apply(input), nil
 }
 
-func (o *appsecEventsObfuscator) obfuscateAppSecTriggers(scanner *scanner, input string, i int, diff *Diff) (int, error) {
+func (o *appsecEventsObfuscator) obfuscateAppSecParameters(scanner *scanner, input string, i int, diff *Diff) (int, error) {
 	i, err := stepTo(scanner, input, i, scanBeginArray)
 	if err != nil {
 		return i, err
 	}
-	for i += 1; i < len(input); i++ {
-		i, err = o.obfuscateAppSecTrigger(scanner, input, i, diff)
-		if err == errUnexpectedType {
-			i, err = stepUntil(scanner, input, i, scanArrayValue)
-			if err != nil {
-				return i, err
-			}
-			continue
-		}
-		if err != nil {
-			return i, err
-		}
-	}
-	return i, errUnexpectedType
-}
-
-func (o *appsecEventsObfuscator) obfuscateAppSecTrigger(scanner *scanner, input string, i int, diff *Diff) (int, error) {
-	i, err := stepTo(scanner, input, i, scanBeginObject)
-	if err != nil {
-		return i, err
-	}
-	var (
-		key string
-	)
-	for i += 1; i < len(input); i++ {
-		key, i, err = scannObjectKey(scanner, input, i)
-		if err == errUnexpectedType {
-			i, err = stepUntil(scanner, input, i, scanObjectValue)
-			if err != nil {
-				return i, err
-			}
-			continue
-		}
-		if err != nil {
-			return i, err
-		}
-		if key == "rule_matches" {
-			i, err = o.obfuscateAppSecRuleMatches(scanner, input, i, diff)
-			if err == errUnexpectedType {
-				i, err = stepUntil(scanner, input, i, scanObjectValue)
-				if err != nil {
-					return i, err
-				}
-				continue
-			}
-			if err != nil {
-				return i, err
-			}
-		}
-		i, err = stepObjectValue(scanner, input, i)
-		if err != nil && err != errUnexpectedType {
-			return i, err
-		}
-	}
-	return i, errUnexpectedType
-}
-
-func (o *appsecEventsObfuscator) obfuscateAppSecRuleMatches(scanner *scanner, input string, i int, diff *Diff) (int, error) {
-	i, err := stepTo(scanner, input, i, scanBeginArray)
-	if err != nil {
-		return i, err
-	}
-	for i += 1; i < len(input); i++ {
-		i, err = o.obfuscateAppSecRuleMatch(scanner, input, i, diff)
-		if err == errUnexpectedType {
-			i, err = stepUntil(scanner, input, i, scanArrayValue)
-			if err != nil {
-				return i, err
-			}
-			continue
-		}
-		if err != nil {
-			return i, err
-		}
-	}
-	return i, errUnexpectedType
-}
-
-func (o *appsecEventsObfuscator) obfuscateAppSecRuleMatch(scanner *scanner, input string, i int, diff *Diff) (int, error) {
-	i, err := stepTo(scanner, input, i, scanBeginObject)
-	if err != nil {
-		return i, err
-	}
-	var (
-		key string
-	)
-	for i += 1; i < len(input); i++ {
-		key, i, err = scannObjectKey(scanner, input, i)
-		if err == errUnexpectedType {
-			i, err = stepUntil(scanner, input, i, scanObjectValue)
-			if err != nil {
-				return i, err
-			}
-			continue
-		}
-		if err != nil {
-			return i, err
-		}
-		if key == "parameters" {
-			i, err = o.obfuscateAppSecRuleParameters(scanner, input, i, diff)
-			if err == errUnexpectedType {
-				i, err = stepUntil(scanner, input, i, scanObjectValue)
-				if err != nil {
-					return i, err
-				}
-				continue
-			}
-			if err != nil {
-				return i, err
-			}
-		}
-		i, err = stepObjectValue(scanner, input, i)
-		if err != nil && err != errUnexpectedType {
-			return i, err
-		}
-	}
-	return i, errUnexpectedType
-}
-
-func (o *appsecEventsObfuscator) obfuscateAppSecRuleParameters(scanner *scanner, input string, i int, diff *Diff) (int, error) {
-	i, err := stepTo(scanner, input, i, scanBeginArray)
-	if err != nil {
-		return i, err
-	}
-	for i += 1; i < len(input); i++ {
+	for ; i < len(input); i++ {
 		i, err = o.obfuscateAppSecRuleParameter(scanner, input, i, diff)
-		if err == errUnexpectedType {
-			i, err = stepUntil(scanner, input, i, scanArrayValue)
-			if err != nil {
-				return i, err
+		if err != nil {
+			if actual, ok := err.(unexpectedScannerOpError); ok {
+				if actual == scanEndArray {
+					return i, nil
+				}
+				i, err = stepUntil(scanner, input, i, scanArrayValue)
+				if err != nil {
+					return i, err
+				}
+				continue
 			}
-			continue
+			return i, err
 		}
+		var op int
+		i, op, err = stepToOneOf(scanner, input, i, scanArrayValue, scanEndArray)
 		if err != nil {
 			return i, err
 		}
+		if op == scanEndArray {
+			return i, nil
+		}
 	}
-	return i, errUnexpectedType
+	return i, errUnexpectedEndOfString
 }
 
 func (o *appsecEventsObfuscator) obfuscateAppSecRuleParameter(scanner *scanner, input string, i int, diff *Diff) (int, error) {
@@ -519,10 +399,7 @@ func obfuscateArrayStrings(scanner *scanner, input string, i int, visit func(fro
 			return i, scanner.err
 		}
 	}
-	if stringFrom != -1 {
-		return i, errUnexpectedEndOfString
-	}
-	return i, errUnexpectedType
+	return i, errUnexpectedEndOfString
 }
 
 func walkObject(scanner *scanner, input string, i int, visit func(keyFrom, keyTo, valueFrom, valueTo int)) (int, error) {
@@ -581,10 +458,7 @@ func walkObject(scanner *scanner, input string, i int, visit func(keyFrom, keyTo
 			return i, scanner.err
 		}
 	}
-	if keyFrom != -1 || valueFrom != -1 || i == len(input) {
-		return i, errUnexpectedEndOfString
-	}
-	return i, errUnexpectedType
+	return i, errUnexpectedEndOfString
 }
 
 func (o *appsecEventsObfuscator) obfuscateAppSecParameterValue(input string, diff *Diff, diffOffset int, hasSensitiveKey bool) error {
@@ -626,38 +500,11 @@ func (o *appsecEventsObfuscator) obfuscateAppSecParameterValue_(scanner *scanner
 	return i, nil
 }
 
-func scannObjectKey(scanner *scanner, input string, i int) (key string, j int, err error) {
-	i, err = stepTo(scanner, input, i, scanBeginLiteral)
-	if err != nil {
-		return "", i, err
-	}
-	from := i
-	for i += 1; i < len(input); i++ {
-		switch scanner.step(scanner, input[i]) {
-		case scanError:
-			return "", i, scanner.err
-		case scanObjectKey:
-			value, err := strconv.Unquote(input[from:i])
-			if err != nil {
-				return "", i, err
-			}
-			return value, i + 1, nil
-		case scanEndObject:
-			return "", i + 1, nil
-		}
-	}
-	return "", i, errUnexpectedType
-}
-
-func stepObjectValue(scanner *scanner, input string, i int) (j int, err error) {
-	return stepUntil(scanner, input, i, scanObjectValue)
-}
-
 func stepTo(scanner *scanner, input string, i int, to int) (int, error) {
 	for ; i < len(input); i++ {
-		switch scanner.step(scanner, input[i]) {
+		switch op := scanner.step(scanner, input[i]); op {
 		default:
-			return i + 1, errUnexpectedType
+			return i + 1, unexpectedScannerOpError(op)
 		case scanSkipSpace, scanContinue:
 			continue
 		case scanError:
@@ -666,7 +513,26 @@ func stepTo(scanner *scanner, input string, i int, to int) (int, error) {
 			return i + 1, nil
 		}
 	}
-	return i, errUnexpectedType
+	return i, errUnexpectedEndOfString
+}
+
+func stepToOneOf(scanner *scanner, input string, i int, to ...int) (j int, op int, err error) {
+	for ; i < len(input); i++ {
+		switch op := scanner.step(scanner, input[i]); op {
+		default:
+			for _, to := range to {
+				if to == op {
+					return i + 1, op, nil
+				}
+			}
+			return i + 1, op, unexpectedScannerOpError(op)
+		case scanSkipSpace, scanContinue:
+			continue
+		case scanError:
+			return i + 1, op, scanner.err
+		}
+	}
+	return i, 0, errUnexpectedEndOfString
 }
 
 func stepUntil(scanner *scanner, input string, i int, until int) (int, error) {
@@ -680,25 +546,7 @@ func stepUntil(scanner *scanner, input string, i int, until int) (int, error) {
 			return i + 1, nil
 		}
 	}
-	return i, errUnexpectedType
-}
-
-func stepUntilEndObjectString(scanner *scanner, input string, i int) (j int, delim string, err error) {
-	for ; i < len(input); i++ {
-		op := scanner.step(scanner, input[i])
-		fmt.Println(op)
-		switch op {
-		case scanError:
-			return i + 1, "", scanner.err
-		case scanSkipSpace, scanContinue:
-			continue
-		case scanEndObject:
-			return i + 1, "", nil
-		case scanObjectValue:
-			return i + 1, ",", nil
-		}
-	}
-	return i, "", errUnexpectedType
+	return i, errUnexpectedEndOfString
 }
 
 func scanString(scanner *scanner, input string, i int) (value string, from, j int, err error) {
@@ -708,10 +556,10 @@ func scanString(scanner *scanner, input string, i int) (value string, from, j in
 	}
 	from = i - 1
 	if input[from] != '"' {
-		return "", from, i + 1, errUnexpectedType
+		return "", from, i + 1, unexpectedScannerOpError(scanBeginLiteral)
 	}
 	for ; i < len(input); i++ {
-		switch scanner.step(scanner, input[i]) {
+		switch op := scanner.step(scanner, input[i]); op {
 		case scanError:
 			return "", from, i + 1, scanner.err
 		case scanContinue:
@@ -720,7 +568,7 @@ func scanString(scanner *scanner, input string, i int) (value string, from, j in
 				return input[from:to], from, to, nil
 			}
 		default:
-			return "", from, i + 1, errUnexpectedType
+			return "", from, i + 1, unexpectedScannerOpError(op)
 		}
 	}
 	return "", from, i, errUnexpectedEndOfString
