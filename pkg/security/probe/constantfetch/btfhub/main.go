@@ -185,12 +185,12 @@ func (cc *constantCollector) AppendOffsetofRequest(id, typeName, fieldName, head
 	})
 }
 
-func (c *constantCollector) FinishAndGetResults() (map[string]uint64, error) {
-	typeNames := make([]string, 0, len(c.requests))
-	for _, r := range c.requests {
+func (cc *constantCollector) FinishAndGetResults() (map[string]uint64, error) {
+	typeNames := make([]string, 0, len(cc.requests))
+	for _, r := range cc.requests {
 		typeNames = append(typeNames, r.typeName)
 	}
-	output, err := loopRunPahole(c.btfPath, typeNames)
+	output, err := loopRunPahole(cc.btfPath, typeNames)
 	if err != nil {
 		exitErr := err.(*exec.ExitError)
 		fmt.Println(string(exitErr.Stderr))
@@ -223,7 +223,7 @@ func (c *constantCollector) FinishAndGetResults() (map[string]uint64, error) {
 	}
 	constants := make(map[string]uint64)
 
-	for _, r := range c.requests {
+	for _, r := range cc.requests {
 		if r.sizeof {
 			value := pc.parsePaholeOutput(r.typeName, func(line string) (uint64, bool) {
 				if matches := sizeRe.FindStringSubmatch(line); len(matches) != 0 {
