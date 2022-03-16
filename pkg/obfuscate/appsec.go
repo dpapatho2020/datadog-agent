@@ -14,9 +14,8 @@ import (
 	"strings"
 )
 
-// ObfuscateAppSec obfuscates the given appsec tag value in order to remove sensitive values from the appsec security
-// events. The tag value should be of the form `{"triggers":<appsec events>}` and follow the JSON schema defined at
-// https://github.com/DataDog/libddwaf/blob/1.0.17/schema/appsec-event-1.0.0.json
+// ObfuscateAppSec obfuscates the given appsec tag value in order to remove
+// sensitive values from the appsec security events.
 func (o *Obfuscator) ObfuscateAppSec(val string) string {
 	keyRE := o.opts.AppSec.ParameterKeyRegexp
 	valueRE := o.opts.AppSec.ParameterValueRegexp
@@ -428,7 +427,8 @@ func walkObject(scanner *scanner, input string, i int, visit func(keyFrom, keyTo
 			return i, scanner.err
 		}
 	}
-	return i, errUnexpectedEndOfString
+	scanner.eof()
+	return i, scanner.err
 }
 
 // Helper function to step to the given expected scanner operation `to`.

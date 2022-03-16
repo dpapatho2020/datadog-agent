@@ -262,12 +262,11 @@ func TestObfuscateAppSec(t *testing.T) {
 
 func TestObfuscateRuleMatchParameter(t *testing.T) {
 	i := []struct {
-		name                          string
-		input                         string
-		expectedOutput                string
-		expectedSyntaxError           bool
-		unexpectedScannerOpError      int
-		expectedUnexpectedEndOfString bool
+		name                     string
+		input                    string
+		expectedOutput           string
+		expectedSyntaxError      bool
+		unexpectedScannerOpError int
 	}{
 		{
 			name:           "value-alone",
@@ -345,10 +344,10 @@ func TestObfuscateRuleMatchParameter(t *testing.T) {
 			expectedOutput: `{ "highlight": [ "i am a ? value", "i am not a a sensitive value", "i am another ? value" ], "key 1": "SENSITIVE_VALUE", "key 2": [ "SENSITIVE_VALUE" ], "value": "i am a ? value with many ?", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null, "key_path": "bad type - SENSITIVE_KEY" }`,
 		},
 		{
-			name:                          "unterminated-json",
-			input:                         `{ "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ], "key 1": "SENSITIVE_VALUE", "key_path": ["SENSITIVE_KEY"], "key 2": [ "SENSITIVE_VALUE" ], "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null`,
-			expectedOutput:                `{ "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ], "key 1": "SENSITIVE_VALUE", "key_path": ["SENSITIVE_KEY"], "key 2": [ "SENSITIVE_VALUE" ], "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null`,
-			expectedUnexpectedEndOfString: true,
+			name:                "unterminated-json",
+			input:               `{ "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ], "key 1": "SENSITIVE_VALUE", "key_path": ["SENSITIVE_KEY"], "key 2": [ "SENSITIVE_VALUE" ], "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null`,
+			expectedOutput:      `{ "highlight": [ "i am a SENSITIVE_VALUE value", "i am not a a sensitive value", "i am another SENSITIVE_VALUE value" ], "key 1": "SENSITIVE_VALUE", "key_path": ["SENSITIVE_KEY"], "key 2": [ "SENSITIVE_VALUE" ], "value": "i am a SENSITIVE_VALUE value with many SENSITIVE_VALUE", "key 3": { "SENSITIVE_KEY": "SENSITIVE_VALUE" }, "SENSITIVE_KEY": null`,
+			expectedSyntaxError: true,
 		},
 		{
 			name:                "syntax-error",
@@ -373,8 +372,6 @@ func TestObfuscateRuleMatchParameter(t *testing.T) {
 					require.Equal(t, scanner.err, err)
 				} else if tc.unexpectedScannerOpError != 0 {
 					require.Equal(t, tc.unexpectedScannerOpError, err)
-				} else if tc.expectedUnexpectedEndOfString {
-					require.Equal(t, errUnexpectedEndOfString, err)
 				} else {
 					require.NoError(t, err)
 				}
@@ -716,12 +713,11 @@ func TestHasSentitiveKeyPath(t *testing.T) {
 
 func TestWalkObject(t *testing.T) {
 	for _, tc := range []struct {
-		name                               string
-		input                              string
-		expectedSeen                       map[string]string
-		expectedSyntaxError                bool
-		unexpectedScannerOpError           bool
-		expectedUnexpectedEndOfStringError bool
+		name                     string
+		input                    string
+		expectedSeen             map[string]string
+		expectedSyntaxError      bool
+		unexpectedScannerOpError unexpectedScannerOpError
 	}{
 		{
 			name:         "flat",
@@ -776,57 +772,57 @@ func TestWalkObject(t *testing.T) {
 		{
 			name:                     "null",
 			input:                    "null",
-			unexpectedScannerOpError: true,
+			unexpectedScannerOpError: unexpectedScannerOpError(scanBeginLiteral),
 		},
 		{
 			name:                     "array",
 			input:                    `[{"k":"v"}]`,
-			unexpectedScannerOpError: true,
+			unexpectedScannerOpError: unexpectedScannerOpError(scanBeginArray),
 		},
 		{
 			name:                     "number",
 			input:                    `1`,
-			unexpectedScannerOpError: true,
+			unexpectedScannerOpError: unexpectedScannerOpError(scanBeginLiteral),
 		},
 		{
 			name:                     "float",
 			input:                    `1.234`,
-			unexpectedScannerOpError: true,
+			unexpectedScannerOpError: unexpectedScannerOpError(scanBeginLiteral),
 		},
 		{
 			name:                     "string",
 			input:                    `"1234"`,
-			unexpectedScannerOpError: true,
+			unexpectedScannerOpError: unexpectedScannerOpError(scanBeginLiteral),
 		},
 		{
-			name:                               "unterminated-json",
-			input:                              `{"k":"v"`,
-			expectedUnexpectedEndOfStringError: true,
+			name:                "unterminated-json",
+			input:               `{"k":"v"`,
+			expectedSyntaxError: true,
 		},
 		{
-			name:                               "unterminated-json",
-			input:                              `{"k":"v`,
-			expectedUnexpectedEndOfStringError: true,
+			name:                "unterminated-json",
+			input:               `{"k":"v`,
+			expectedSyntaxError: true,
 		},
 		{
-			name:                               "unterminated-json",
-			input:                              `{"k":`,
-			expectedUnexpectedEndOfStringError: true,
+			name:                "unterminated-json",
+			input:               `{"k":`,
+			expectedSyntaxError: true,
 		},
 		{
-			name:                               "unterminated-json",
-			input:                              `{"k"`,
-			expectedUnexpectedEndOfStringError: true,
+			name:                "unterminated-json",
+			input:               `{"k"`,
+			expectedSyntaxError: true,
 		},
 		{
-			name:                               "unterminated-json",
-			input:                              `{"k`,
-			expectedUnexpectedEndOfStringError: true,
+			name:                "unterminated-json",
+			input:               `{"k`,
+			expectedSyntaxError: true,
 		},
 		{
-			name:                               "unterminated-json",
-			input:                              `{`,
-			expectedUnexpectedEndOfStringError: true,
+			name:                "unterminated-json",
+			input:               `{`,
+			expectedSyntaxError: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -841,10 +837,8 @@ func TestWalkObject(t *testing.T) {
 			})
 			if tc.expectedSyntaxError {
 				require.Equal(t, scanner.err, err)
-			} else if tc.unexpectedScannerOpError {
+			} else if tc.unexpectedScannerOpError != 0 {
 				require.Equal(t, tc.unexpectedScannerOpError, err)
-			} else if tc.expectedUnexpectedEndOfStringError {
-				require.Equal(t, errUnexpectedEndOfString, err)
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, len(tc.input), i)
