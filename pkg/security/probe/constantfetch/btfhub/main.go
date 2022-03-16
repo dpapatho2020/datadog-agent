@@ -131,7 +131,7 @@ func (c *treeWalkCollector) treeWalkerBuilder(prefix string) fs.WalkDirFunc {
 
 		fmt.Println(path)
 
-		constants, err := extractConstantsFromBTF(path)
+		constants, err := extractConstantsFromBTF(path, distribution, distribVersion)
 		if err != nil {
 			return err
 		}
@@ -141,7 +141,7 @@ func (c *treeWalkCollector) treeWalkerBuilder(prefix string) fs.WalkDirFunc {
 	}
 }
 
-func extractConstantsFromBTF(archivePath string) (map[string]uint64, error) {
+func extractConstantsFromBTF(archivePath, distribution, distribVersion string) (map[string]uint64, error) {
 	tmpDir, err := os.MkdirTemp("", "extract-dir")
 	if err != nil {
 		return nil, err
@@ -162,8 +162,14 @@ func extractConstantsFromBTF(archivePath string) (map[string]uint64, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	osRelease := map[string]string{
+		"ID":         distribution,
+		"VERSION_ID": distribVersion,
+	}
 	kv := &kernel.Version{
-		Code: kvCode,
+		Code:      kvCode,
+		OsRelease: osRelease,
 	}
 
 	fetcher := newConstantCollector(btfPath)
